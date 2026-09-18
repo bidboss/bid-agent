@@ -1,5 +1,7 @@
 # FrontCode
 
+仓库地址：https://github.com/bidboss/bid-agent
+
 面向前端开发的 AI 终端助手（CLI），在本地终端中对话、读写代码、检索项目、调用工具，并支持设计稿对照与页面调试。定位类似 Claude Code，技术栈为 Node.js + ESM + OpenAI 兼容接口。
 
 ---
