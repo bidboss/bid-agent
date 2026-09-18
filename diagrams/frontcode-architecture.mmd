@@ -1,0 +1,33 @@
+graph LR
+  User[Developer Terminal] --> App[app.js CLI Entry]
+  App --> Input[input Enhanced Prompt]
+  App --> Commands[commands Slash Cmds]
+  App --> Files[files At Hash Attach]
+  App --> Context[contextRead System Memory Skills Rules]
+  App --> Rag[ragHandle LanceDB RAG]
+  App --> Request[request OpenAI Client]
+
+  Input -->|slash at hash| App
+  Commands -->|builtin custom| App
+  Files -->|source design rules| App
+  Context -->|prompt templates| Request
+  Rag -->|doc chunks| Request
+
+  Request -->|chat tools loop| LLM[DashScope Qwen Compatible API]
+  Request --> Tools[tools Registry]
+  Tools --> Local[local Tools]
+  Tools --> MCP[MCP Client SDK]
+
+  Local -->|read write grep bash| FS[Project Filesystem]
+  Local -->|confirm select| User
+  Local -->|memory| MemStore[".front memory"]
+  Local -->|debugger_page| PW[Playwright Browser]
+  Local -->|diff_pic| LLM
+  Rag --> VecDB[".front LanceDB"]
+  Rag --> Emb[Embeddings API]
+  Emb --> LLM
+  MCP -->|stdio sse http| ExtMCP[External MCP Servers]
+  PW -->|screenshot console| Design[".front design screenshot"]
+
+  Config[".front settings.json"] --> Request
+  Config --> MCP
