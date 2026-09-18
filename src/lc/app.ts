@@ -1,8 +1,8 @@
 // 启动入口：inquirer 循环 + 拼装消息 + 调模型（含工具循环） + 存会话 |
 // 每次只需要在启动会话时加载一次 配置、模型、会话文件，后续每轮对话只需要拼装消息、调模型、存会话。
 
-// 触发工具注册（导入 tools/index.ts 会自动注册所有工具）
-import './tools/index.ts';
+// 触发本地工具注册（导入会同步注册本地工具）
+import { registerAllMcpTools } from './tools/index.ts';
 import { listTools } from './tools/registry.ts';
 import { chatWithTools } from './tools/engine.ts';
 import { input } from '@inquirer/prompts';
@@ -17,6 +17,8 @@ import {
 } from './session.ts';
 import { buildSendMessages } from './prompts.ts';
 import { toolCallLog } from './log.ts';
+import { disconnectAllMcp } from './tools/mcp/loader.ts';
+
 const SESSION_ID = 'default';
 
 async function main() {
@@ -30,13 +32,23 @@ async function main() {
   console.log(`已加载会话: user=${userId}, session=${SESSION_ID}, 历史 ${history.length} 条`);
 
   const model = createChatModel({ temperature: 0.7 });
-  const boundModel = model.bindTools(listTools());// 模型绑定工具
+  // bindTools改为每轮对话时重新 bind，保证新增 MCP 工具及时可用
+
+  try {
+    const n = await registerAllMcpTools(config.mcpServer);
+    if (n > 0) console.log(`[MCP] 共注册 ${n} 个第三方工具（已合并到对话中）`);
+  } catch (error: any) {
+    console.warn(`[MCP] 加载出错: ${error.message}`);
+  }
 
   // 对话循环
   while (true) {
     const userInput = (await input({ message: '问：' })).trim();
     if (!userInput) continue;
     if (userInput === 'exit' || userInput === 'quit') break;
+
+    // 每轮重新 bind，捕获 MCP 后续加载的工具
+    const boundModel = model.bindTools(listTools());
 
     // 拼装本轮消息
     const sendMessages = await buildSendMessages(history, userInput);
@@ -60,13 +72,21 @@ async function main() {
     saveMessagesToFile(sessionFilePath, history, metaToSave);
   }
 
+  await disconnectAllMcp();
   console.log('对话结束，会话已保存');
 }
+
+// Ctrl+C 优雅关闭：避免 stdio MCP 子进程残留
+process.on('SIGINT', async () => {
+  await disconnectAllMcp().catch(() => {});
+  process.exit(0);
+});
 
 // 执行主函数
 try {
   await main();
 } catch (e) {
   console.error('运行出错:', e);
+  await disconnectAllMcp().catch(() => {});
   process.exit(1);
 }

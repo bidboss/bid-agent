@@ -1,12 +1,14 @@
 // 工具入口文件
-// 所有工具在此统一注册，app.ts 只需 import 本文件即可
-// 新增工具：在这里加一行 import，然后 push 到数组即可
+// 同步注册本地工具（立即可用）
+// 暴露 registerAllMcpTools() 供 app.ts 异步调用（fire-and-forget）
 
 import { registerTool } from './registry.js';
 import readFileTool from './implementations/read_file.js';
 import getLocationTool from './implementations/get_location.js';
 import searchRestaurantTool from './implementations/search_restaurant.js';
 import placeOrderTool from './implementations/place_order.js';
+import { loadMcpServers } from './mcp/loader.js';
+import { registerMcpTools } from './mcp/adapter.js';
 
 // 各工具的 execute 签名是强类型 (args: infer<T>) => Promise<ToolResult>
 // registerTool 接受 ToolExecutor = (args: Record<string, unknown>) => Promise<ToolResult>
@@ -15,13 +17,27 @@ function wrap<T>(tool: { execute: (args: T) => Promise<any> }) {
   return (args: Record<string, unknown>) => tool.execute(args as T);
 }
 
-const tools = [
+const localTools = [
   { ...readFileTool, wrap: wrap(readFileTool) },
   { ...getLocationTool, wrap: wrap(getLocationTool) },
   { ...searchRestaurantTool, wrap: wrap(searchRestaurantTool) },
   { ...placeOrderTool, wrap: wrap(placeOrderTool) },
 ];
 
-for (const tool of tools) {
+// 第一步：同步注册本地工具（立即可用）
+for (const tool of localTools) {
   registerTool(tool.name, tool.description, tool.schema, tool.wrap);
+}
+
+/**
+ * 第二步：异步加载 MCP 工具（fire-and-forget）
+ * 本地对话立即可用；MCP 工具在加载完成后自动出现在 listTools() 中
+ * @returns 注册的 MCP 工具总数
+ */
+export async function registerAllMcpTools(
+  mcpServers: Record<string, Record<string, unknown>>,
+): Promise<number> {
+  const connections = await loadMcpServers(mcpServers);
+  const counts = await Promise.all(connections.map(registerMcpTools));
+  return counts.reduce((a, b) => a + b, 0);
 }

@@ -13,7 +13,7 @@ export interface ModelConfig {
   model: string;
   userId: string;
   embedding: EmbeddingConfig | null;
-  mcpServer: Record<string, unknown>;
+  mcpServer: Record<string, Record<string, unknown>>;
   source: string | null;
   raw: Record<string, unknown>;
 }
