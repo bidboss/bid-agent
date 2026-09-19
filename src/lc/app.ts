@@ -16,10 +16,29 @@ import {
   type SessionMeta,
 } from './session.ts';
 import { buildSendMessages } from './prompts.ts';
-import { toolCallLog } from './log.ts';
+import { toolCallLog, aiReplyLog } from './log.ts';
 import { disconnectAllMcp } from './tools/mcp/loader.ts';
+import { trimMessages } from './memory/window.ts';
+import { runMemoryCommand } from './commands/memory.ts';
 
 const SESSION_ID = 'default';
+
+// 短期记忆窗口：超过此 token 数就压缩
+const SHORT_TERM_TOKEN_BUDGET = 700;
+
+// summarize 用的模型（同主对话模型即可，temperature 调低）
+async function buildSummarizer() {
+  const model = createChatModel({ temperature: 0.2 });
+  return async (dropped: Array<{ role: string; content: string }>): Promise<string> => {
+    const transcript = dropped
+      .map((m) => `[${m.role}] ${m.content}`)
+      .join('\n');
+    const resp = await model.invoke(
+      `请把以下早期对话压缩为不超过 200 字的客观摘要，保留关键事实、用户偏好、待办与决策。\n\n${transcript}`,
+    );
+    return typeof resp.content === 'string' ? resp.content : JSON.stringify(resp.content);
+  };
+}
 
 async function main() {
   // 加载配置 + 会话
@@ -27,16 +46,15 @@ async function main() {
   const userId = config.userId;
   const sessionFilePath = getSessionFilePath(userId, SESSION_ID);
 
-  const { meta, messages: history } = loadMessagesFromFile(sessionFilePath);
+  const { meta, messages: initialHistory } = loadMessagesFromFile(sessionFilePath);
   const created_at = meta?.created_at ?? new Date().toISOString();
-  console.log(`已加载会话: user=${userId}, session=${SESSION_ID}, 历史 ${history.length} 条`);
+  let history = initialHistory;
 
   const model = createChatModel({ temperature: 0.7 });
   // bindTools改为每轮对话时重新 bind，保证新增 MCP 工具及时可用
 
   try {
-    const n = await registerAllMcpTools(config.mcpServer);
-    if (n > 0) console.log(`[MCP] 共注册 ${n} 个第三方工具（已合并到对话中）`);
+    await registerAllMcpTools(config.mcpServer);
   } catch (error: any) {
     console.warn(`[MCP] 加载出错: ${error.message}`);
   }
@@ -47,9 +65,28 @@ async function main() {
     if (!userInput) continue;
     if (userInput === 'exit' || userInput === 'quit') break;
 
+    // 内置指令：/memory
+    if (userInput === '/memory') {
+      try {
+        await runMemoryCommand(history);
+      } catch (e: any) {
+        console.warn(`[/memory] 执行失败: ${e.message ?? e}`);
+      }
+      continue;
+    }
+
     // 每轮重新 bind，捕获 MCP 后续加载的工具
     const boundModel = model.bindTools(listTools());
 
+    // 短期记忆窗口压缩
+    const summarizer = await buildSummarizer();
+    const { trimmed } = await trimMessages(history, {
+      maxTokens: SHORT_TERM_TOKEN_BUDGET,
+      summarizer,
+    });
+    history = trimmed;
+
+    console.log('短期记忆窗口压缩后的对话历史:', history);
     // 拼装本轮消息
     const sendMessages = await buildSendMessages(history, userInput);
 
@@ -57,6 +94,7 @@ async function main() {
     const { newMessages, toolCallRecords } = await chatWithTools(boundModel, sendMessages);
 
     toolCallLog(toolCallRecords);
+    aiReplyLog(newMessages);
 
     history.push(new HumanMessage(userInput));
     for (const msg of newMessages) {

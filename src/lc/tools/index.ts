@@ -7,6 +7,8 @@ import readFileTool from './implementations/read_file.js';
 import getLocationTool from './implementations/get_location.js';
 import searchRestaurantTool from './implementations/search_restaurant.js';
 import placeOrderTool from './implementations/place_order.js';
+import memoryGetTool from './implementations/memory_get.js';
+import memorySaveTool from './implementations/memory_save.js';
 import { loadMcpServers } from './mcp/loader.js';
 import { registerMcpTools } from './mcp/adapter.js';
 
@@ -22,18 +24,16 @@ const localTools = [
   { ...getLocationTool, wrap: wrap(getLocationTool) },
   { ...searchRestaurantTool, wrap: wrap(searchRestaurantTool) },
   { ...placeOrderTool, wrap: wrap(placeOrderTool) },
+  { ...memoryGetTool, wrap: wrap(memoryGetTool) },
+  { ...memorySaveTool, wrap: wrap(memorySaveTool) },
 ];
 
-// 第一步：同步注册本地工具（立即可用）
+// 同步注册本地工具（立即可用）
 for (const tool of localTools) {
   registerTool(tool.name, tool.description, tool.schema, tool.wrap);
 }
 
-/**
- * 第二步：异步加载 MCP 工具（fire-and-forget）
- * 本地对话立即可用；MCP 工具在加载完成后自动出现在 listTools() 中
- * @returns 注册的 MCP 工具总数
- */
+// 异步加载 MCP 工具
 export async function registerAllMcpTools(
   mcpServers: Record<string, Record<string, unknown>>,
 ): Promise<number> {
