@@ -1,18 +1,24 @@
 // 短期记忆窗口
-// 按 token 数截断过长的 messages 数组，并把被截掉的旧消息用 LLM summarize 成一段摘要插到顶部
+// 按 token 数截断过长的 messages 数组：把被截掉的旧消息用 LLM summarize 成一段 HumanMessage
+// 插到「首轮完整问答对之后」，替代被丢弃的 N 轮对话。摘要永远不进持久化 history。
 //
 // 设计要点：
 // 1. 工具调用回合（assistant.tool_calls + 紧跟的若干 tool 消息 + 可选最终 AI 回复）必须成组处理：
 //    要么整组都保留（keep），要么整组都丢弃（dropped），绝不允许半截留存
 //    —— 这避免了模型收到"孤立 ToolMessage"导致 400 BadRequest
 // 2. system 消息永远保留
-// 3. 第一条 user 消息（即会话的最初提问）也保留，避免丢失上下文
+// 3. 首轮完整问答对（user + assistant）也保留，避免对话对断裂
 // 4. 不引入 tiktoken 依赖，使用本地估算（length / 3），精度足够做软上限
 //
 // 算法：
 //   ① 把 tail 切成"回合（round）"列表，每个回合是原子单位
 //   ② 按回合倒序累加 token，整组进 keep 或整组进 dropped
-//   ③ dropped 喂给 summarizer，组装 system + 摘要 + 首条 user + keep
+//   ③ dropped 喂给 summarizer
+//   ④ 组装 system + 首轮问答对 + 摘要 HumanMessage + keep（时序正确）
+//
+// 时序约束：
+//   摘要描述的是"首对之后、被丢弃的 N 轮"里发生的事，必须排在首对之后，
+//   否则模型会先读后续事件摘要、再读更早原始对话，时间线颠倒
 
 import type { BaseMessage } from '@langchain/core/messages';
 import type { TrimOptions } from './type.ts';
@@ -59,6 +65,31 @@ interface Round {
   messages: BaseMessage[];
   tokens: number;
   kind: 'tool' | 'plain';
+}
+
+// 找到首条 user 对应的助手回复（非 tool_call 的 AI 消息）。
+// 工具调用场景：AI(tool_calls) + ToolMessage* + AI(无 tc)，
+// 其中最终回复 AI(无 tc) 才是首对的助手回答。
+function findFirstAssistantIdx(messages: BaseMessage[], afterIdx: number): number {
+  let i = afterIdx + 1;
+  while (i < messages.length) {
+    const m = messages[i];
+    if (hasToolCalls(m)) {
+      // 跳过整个工具回合：AI(tc) + ToolMessages + 最终 AI 回复
+      i++;
+      while (i < messages.length && isToolResultPair(messages[i])) i++;
+      // 继续检查是否有最终 AI 回复（见 splitIntoRounds 的逻辑）
+      if (i < messages.length && getRole(messages[i]) === 'ai' && !hasToolCalls(messages[i])) {
+        return i; // 找到了最终回复
+      }
+      continue;
+    }
+    if (getRole(m) === 'ai') {
+      return i; // 普通 AI 回复（非 tool）
+    }
+    i++;
+  }
+  return -1;
 }
 
 /**
@@ -122,18 +153,22 @@ export async function trimMessages(
   console.log('maxTokens,最大token:', maxTokens);
   if (total <= maxTokens) return { trimmed: messages, summary: null };
 
-  // 2. 永远保留 system 与首条 user
+  // 永远保留 system + 首轮完整问答对
+  // LangChain 用 'human' 作为 user 消息的角色名（不是 'user'）
   const systemMsgs = messages.filter((m) => getRole(m) === 'system');
-  const firstUserIdx = messages.findIndex((m) => getRole(m) === 'user');
+  const firstUserIdx = messages.findIndex((m) => getRole(m) === 'human');
 
-  // 3. 计算 budget：扣除 system + 首条 user
   let budget = maxTokens;
   for (const s of systemMsgs) budget -= tokensOf(s);
   if (firstUserIdx >= 0) budget -= tokensOf(messages[firstUserIdx]);
+  // 首轮助手回答也必须保留，否则对话对不完整
+  const firstAssistantIdx = findFirstAssistantIdx(messages, firstUserIdx);
+  if (firstAssistantIdx >= 0) budget -= tokensOf(messages[firstAssistantIdx]);
   if (budget < 0) budget = 0;
 
-  // 4. 把 firstUserIdx 之后的剩余消息切成回合
-  const tail = firstUserIdx >= 0 ? messages.slice(firstUserIdx + 1) : messages.slice();
+  // 4. 把首轮问答对之后的剩余消息切成回合
+  const sliceStart = firstAssistantIdx >= 0 ? firstAssistantIdx + 1 : (firstUserIdx >= 0 ? firstUserIdx + 1 : 0);
+  const tail = messages.slice(sliceStart);
   const rounds = splitIntoRounds(tail);
 
   // 5. 倒序按回合累加 token：整组进 keep 或整组进 dropped
@@ -170,14 +205,21 @@ export async function trimMessages(
     }
   }
 
-  // 8. 组装 trimmed：system + 摘要 + 首条 user + keep（回合内顺序与 tail 一致）
+  // 8. 组装 trimmed：system + 首轮问答对 + 摘要 + keep（时序正确）
+  //    - 首轮问答对（user + assistant）排在最前（事件最早）
+  //    - 摘要排首对之后（描述首对之后、被丢的 N 轮）
+  //    - keep 排摘要之后（剩余较新对话）
   const trimmed: BaseMessage[] = [];
   trimmed.push(...systemMsgs);
-  if (summary) {
-    const { SystemMessage } = await import('@langchain/core/messages');
-    trimmed.push(new SystemMessage(`[会话早期摘要]\n${summary}`));
-  }
+
+  // 保留首轮完整问答对
   if (firstUserIdx >= 0) trimmed.push(messages[firstUserIdx]);
+  if (firstAssistantIdx >= 0) trimmed.push(messages[firstAssistantIdx]);
+
+  if (summary) {
+    const { HumanMessage } = await import('@langchain/core/messages');
+    trimmed.push(new HumanMessage(`[会话早期摘要]\n${summary}`));
+  }
   for (const r of keepRounds) trimmed.push(...r.messages);
 
   return { trimmed, summary };

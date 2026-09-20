@@ -24,7 +24,7 @@ import { runMemoryCommand } from './commands/memory.ts';
 const SESSION_ID = 'default';
 
 // 短期记忆窗口：超过此 token 数就压缩
-const SHORT_TERM_TOKEN_BUDGET = 700;
+const SHORT_TERM_TOKEN_BUDGET = 400;
 
 // summarize 用的模型（同主对话模型即可，temperature 调低）
 async function buildSummarizer() {
@@ -59,6 +59,9 @@ async function main() {
     console.warn(`[MCP] 加载出错: ${error.message}`);
   }
 
+  // summarizer 在循环外创建，避免每轮重复初始化模型
+  const summarizer = await buildSummarizer();
+
   // 对话循环
   while (true) {
     const userInput = (await input({ message: '问：' })).trim();
@@ -78,17 +81,16 @@ async function main() {
     // 每轮重新 bind，捕获 MCP 后续加载的工具
     const boundModel = model.bindTools(listTools());
 
-    // 短期记忆窗口压缩
-    const summarizer = await buildSummarizer();
-    const { trimmed } = await trimMessages(history, {
+    // 短期记忆窗口压缩（sendHistory 仅作临时变量，不覆盖 history）
+    const { trimmed: sendHistory } = await trimMessages(history, {
       maxTokens: SHORT_TERM_TOKEN_BUDGET,
       summarizer,
     });
-    history = trimmed;
 
-    console.log('短期记忆窗口压缩后的对话历史:', history);
-    // 拼装本轮消息
-    const sendMessages = await buildSendMessages(history, userInput);
+    // 拼装本轮消息（用 sendHistory，发给模型的上下文可含摘要）
+    const sendMessages = await buildSendMessages(sendHistory, userInput);
+
+    console.log('sendMessages 发送给模型的消息：', sendMessages);
 
     // 调用引擎（工具循环）
     const { newMessages, toolCallRecords } = await chatWithTools(boundModel, sendMessages);
@@ -97,6 +99,7 @@ async function main() {
     aiReplyLog(newMessages);
 
     history.push(new HumanMessage(userInput));
+
     for (const msg of newMessages) {
       history.push(msg);
     }

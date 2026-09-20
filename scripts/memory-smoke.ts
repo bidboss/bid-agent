@@ -181,6 +181,66 @@ async function main() {
       `AI(tool_calls) 数=${aisWithTC.length} 必须等于 ToolMessage 数=${tms.length}（整组保留）`,
     );
 
+    console.log('\n== 4b-2. trimMessages 时序正确：system → 首对 → 摘要 → keep → 当前 ==');
+    // 场景：极端 trim 后，trimmed 的角色排列必须是：
+    //   ① system
+    //   ② human（首问）
+    //   ③ human（摘要）
+    //   ④ 较新 round
+    // 防止时间线颠倒（"先读后续事件摘要，再读更早原始对话"）
+    //
+    // 数据布局：
+    //   total = 1 + 2 + 34 + 34 + 7 + 7 = 85
+    //   maxTokens=40 → budget = 40 - 1 - 2 = 37
+    //   第二 round = 34+34 = 68 > 37 → 整组丢，触发摘要
+    //   第三 round = 7+7 = 14 < 37 → 装进 keep
+    const seqMsgs: any[] = [
+      new SystemMessage('sys'),                          // 1 token
+      new HumanMessage('首问'),                          // 2 token
+      new HumanMessage('a'.repeat(100)),                 // 34 token - 巨大
+      new AIMessage('b'.repeat(100)),                    // 34 token - 巨大
+      new HumanMessage('c'.repeat(20)),                  // 7 token - 小
+      new AIMessage('d'.repeat(20)),                     // 7 token - 小
+    ];
+    const { trimmed: seqTrimmed } = await trimMessages(seqMsgs, {
+      maxTokens: 40,
+      summarizer: async (dropped) => '早期问过第二组,涉及 A/B/C 三个事实',
+    });
+    const seqRoles = seqTrimmed.map((m: any) =>
+      m.role ?? m.lc_kwargs?.type ?? m.type ?? m.constructor?.name ?? ''
+    );
+    // 找到摘要消息（HumanMessage 且 content 含 [会话早期摘要]）
+    let summaryIdx = -1;
+    for (let i = 0; i < seqTrimmed.length; i++) {
+      const m: any = seqTrimmed[i];
+      const role = m.role ?? m.lc_kwargs?.type ?? m.type ?? m.constructor?.name ?? '';
+      const text = typeof m.content === 'string' ? m.content : '';
+      if (role === 'human' && text.startsWith('[会话早期摘要]')) {
+        summaryIdx = i;
+        break;
+      }
+    }
+    // 找到首条非摘要的 human（首问）
+    let firstHumanIdx = -1;
+    for (let i = 0; i < seqTrimmed.length; i++) {
+      const m: any = seqTrimmed[i];
+      const role = m.role ?? m.lc_kwargs?.type ?? m.type ?? m.constructor?.name ?? '';
+      const text = typeof m.content === 'string' ? m.content : '';
+      if (role === 'human' && !text.startsWith('[会话早期摘要]')) {
+        firstHumanIdx = i;
+        break;
+      }
+    }
+    assert(summaryIdx > 0, `摘要消息必须存在（找到位置 ${summaryIdx}）`);
+    assert(summaryIdx > firstHumanIdx, `摘要必须排在首条 user 之后（首条 human 在 idx=${firstHumanIdx}，摘要在 idx=${summaryIdx}）`);
+    // 摘要类型必须是 HumanMessage（不是 SystemMessage）
+    const summaryMsg = seqTrimmed[summaryIdx] as any;
+    assert(summaryMsg.constructor?.name === 'HumanMessage', `摘要类型必须是 HumanMessage，实际 ${summaryMsg.constructor?.name}`);
+    assert(seqRoles[0] === 'system', `第一条必须是 system（实际 ${seqRoles[0]}）`);
+    // 摘要之后必须还有保留的 round
+    assert(summaryIdx < seqTrimmed.length - 1, `摘要之后必须保留较新对话（摘要 idx=${summaryIdx}, 总长=${seqTrimmed.length}）`);
+    console.log(`  时序排列: [${seqRoles.join(', ')}]`);
+
     console.log('\n== 4b-2. trimMessages 工具回合超额时整组丢弃（不留半截） ==');
     // maxTokens 极小，让所有 4 个 tool round 都装不下 → 必须全丢
     // 注意：保留的会有 system + 摘要 + 首条 user
