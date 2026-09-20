@@ -9,6 +9,7 @@ import searchRestaurantTool from './implementations/search_restaurant.js';
 import placeOrderTool from './implementations/place_order.js';
 import memoryGetTool from './implementations/memory_get.js';
 import memorySaveTool from './implementations/memory_save.js';
+import skillLoadTool from './implementations/skill_load.js';
 import { loadMcpServers } from './mcp/loader.js';
 import { registerMcpTools } from './mcp/adapter.js';
 
@@ -26,6 +27,7 @@ const localTools = [
   { ...placeOrderTool, wrap: wrap(placeOrderTool) },
   { ...memoryGetTool, wrap: wrap(memoryGetTool) },
   { ...memorySaveTool, wrap: wrap(memorySaveTool) },
+  { ...skillLoadTool, wrap: wrap(skillLoadTool) },
 ];
 
 // 同步注册本地工具（立即可用）

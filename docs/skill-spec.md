@@ -77,9 +77,17 @@ allowed-tools:                # 选填，允许使用的工具列表
 |------|------|------|
 | 启动 | 扫描两层目录，读取所有 SKILL.md frontmatter | `scanSkills()` |
 | 每轮对话 | 取 `preamble-tier <= 1` 的 skills 拼成 SystemMessage | `getSkillSummaryText(1)` |
-| 模型按需 | 模型调用 `skill_load(name)` 工具读取完整内容 | `loadSkillFull(name)` |
+| 模型按需 | 模型调用 `skill_load(name)` 工具读取完整内容 | `src/lc/tools/implementations/skill_load.ts`（内部走 `loadSkillFull`） |
 
 注入位置：位于历史消息（`history`）之前、本轮 user input 之前。
+
+### 3.1 工具参数
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | ✅ | SKILL.md frontmatter 的 `name` 字段（区分大小写）。可先看本轮 system 摘要里的 `Skill[<name>]` 块取名 |
+
+未命中时返回 `success=false` + 错误信息（提示模型回到摘要列表核对 name）；正文超过 64KB 会自动截断并附 `原始长度 N 字节` 提示。
 
 ---
 
@@ -105,6 +113,10 @@ allowed-tools:                # 选填，允许使用的工具列表
 |------|------|
 | `src/lc/skills.ts` | skill 扫描、摘要渲染、全文加载 |
 | `src/lc/prompts.ts` | skill 摘要注入到 messages |
+| `src/lc/tools/index.ts` | 同步注册本地工具（含 `skill_load`） |
+| `src/lc/tools/implementations/skill_load.ts` | `skill_load` 工具实现，包装 `loadSkillFull()` |
+| `src/lc/tools/registry.ts` | 工具注册中心 + 调度执行（`executeTool`） |
+| `src/lc/tools/engine.ts` | 工具循环引擎（`chatWithTools`） |
 
 ---
 
@@ -112,5 +124,6 @@ allowed-tools:                # 选填，允许使用的工具列表
 
 | 日期 | 变更 | 负责人 |
 |------|------|--------|
-| 2026-09-20 | 初始规范文档 | AI Assistant |
-| 2026-09-20 | 从 `docs/skill&rule-spec.md` 拆出，专注 Skill 体系 | AI Assistant |
+| 2026-09-21 | 新增 `skill_load` 工具，更新加载策略表格与代码索引 | bidboss |
+| 2026-09-20 | 初始规范文档 | bidboss |
+| 2026-09-20 | 从 `docs/skill&rule-spec.md` 拆出，专注 Skill 体系 | bidboss |

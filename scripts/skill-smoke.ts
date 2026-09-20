@@ -204,6 +204,24 @@ allowed-tools: []
     const { buildSendMessages } = await import('../src/lc/prompts.ts');
     assert(typeof buildSendMessages === 'function', 'buildSendMessages 是函数');
 
+    console.log('\n== 9. skill_load 工具注册 + 执行 ==');
+    const { registerTool, getTool, executeTool, listTools } = await import('../src/lc/tools/registry.ts');
+    const skillLoadImpl = (await import('../src/lc/tools/implementations/skill_load.ts')).default;
+    registerTool(skillLoadImpl.name, skillLoadImpl.description, skillLoadImpl.schema, (args) => skillLoadImpl.execute(args as any));
+
+    const def = getTool('skill_load');
+    assert(!!def, 'getTool("skill_load") 命中');
+    const names = listTools().map((t) => t.function.name);
+    assert(names.includes('skill_load'), 'listTools() 包含 skill_load');
+
+    const ok = await executeTool('skill_load', { name: 'Demo Skill' });
+    assert(ok.success === true, '加载存在的 skill 成功');
+    assert(ok.content.includes('# Demo Skill'), '返回完整正文');
+
+    const notFound = await executeTool('skill_load', { name: 'Not Exists' });
+    assert(notFound.success === false, '加载不存在的 skill 返回 success=false');
+    assert(typeof notFound.error === 'string' && notFound.error.includes('Not Exists'), '错误信息包含传入的 name');
+
     console.log('\n全部自检通过');
   } finally {
     process.chdir(prevCwd);
