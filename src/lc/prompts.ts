@@ -12,10 +12,32 @@ import { renderAgentPrompt } from './agents.ts';
 import { loadAllMemory } from './memory/store.ts';
 import { searchMemory } from './memory/vector.ts';
 import { searchKb, renderKbRagTemplate } from './rag/index.ts';
+import { getSkillSummaryText } from './skills.ts';
+import {
+  parseFileTagsFromInput,
+  matchRulesForFiles,
+  scanRules,
+  type RuleDoc,
+} from './rules.ts';
 
+// 把 skill 摘要（tier=1 默认注入）拼成一条 system 块；无 skill 时跳过
 function buildSkillMessages(): BaseMessage[] {
-  // TODO: Phase 6 接入 skills 时实现
-  return [];
+  const text = getSkillSummaryText(1);
+  if (!text) return [];
+  return [new SystemMessage(text)];
+}
+
+// 根据 userInput 中 @[file] 标签匹配规则，命中后注入本轮 user 消息前的 system 块
+function buildRulesMessages(userInput: string): BaseMessage[] {
+  const files = parseFileTagsFromInput(userInput);
+  if (files.length === 0) return [];
+
+  // 复用一次扫描，避免每次匹配都重新读盘
+  const rules: RuleDoc[] = scanRules();
+  const matched = matchRulesForFiles(files, rules);
+  if (!matched) return [];
+
+  return [new SystemMessage(`## 匹配的规则（基于 @[file] 标签自动注入）\n\n${matched}`)];
 }
 
 // 把长期 .md 拼成 system 块
@@ -77,6 +99,8 @@ export async function buildSendMessages(
 
   const kbRecallMsg = await buildKbRecallMessage(userInput);
   if (kbRecallMsg) messages.push(kbRecallMsg);
+
+  messages.push(...buildRulesMessages(userInput));
 
   messages.push(...history);
   messages.push(buildHumanMessage({ text: userInput }));
