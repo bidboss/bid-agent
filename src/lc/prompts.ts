@@ -11,6 +11,7 @@ import { buildHumanMessage } from './messages.ts';
 import { renderAgentPrompt } from './agents.ts';
 import { loadAllMemory } from './memory/store.ts';
 import { searchMemory } from './memory/vector.ts';
+import { searchKb, renderKbRagTemplate } from './rag/index.ts';
 
 function buildSkillMessages(): BaseMessage[] {
   // TODO: Phase 6 接入 skills 时实现
@@ -45,6 +46,19 @@ async function buildMemoryRecallMessage(query: string): Promise<BaseMessage | nu
   }
 }
 
+// 按 query 检索知识库 RAG，命中为空时跳过注入
+async function buildKbRecallMessage(query: string): Promise<BaseMessage | null> {
+  try {
+    const hits = await searchKb(query, 4);
+    if (hits.length === 0) return null;
+    const body = renderKbRagTemplate(hits);
+    return new SystemMessage(body);
+  } catch (e: any) {
+    // 检索失败静默降级，不阻塞主流程
+    return null;
+  }
+}
+
 // 拼装本轮消息：系统（异步渲染） + 长期记忆 + skill 占位 + history + userInput
 export async function buildSendMessages(
   history: BaseMessage[],
@@ -60,6 +74,9 @@ export async function buildSendMessages(
 
   const recallMsg = await buildMemoryRecallMessage(userInput);
   if (recallMsg) messages.push(recallMsg);
+
+  const kbRecallMsg = await buildKbRecallMessage(userInput);
+  if (kbRecallMsg) messages.push(kbRecallMsg);
 
   messages.push(...history);
   messages.push(buildHumanMessage({ text: userInput }));

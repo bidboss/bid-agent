@@ -1,5 +1,5 @@
 // 长期记忆的向量存储
-// LanceDB 同库不同表：memory_embeddings 与 Phase 5 文档库的 doc_embeddings 共用
+// LanceDB 同库不同表：memory_embeddings 与 Phase 5 知识库的 kb_embeddings 共用
 // .front/lancedb-data/，但表名隔离
 //
 // 设计要点：

@@ -20,6 +20,7 @@ import { toolCallLog, aiReplyLog } from './log.ts';
 import { disconnectAllMcp } from './tools/mcp/loader.ts';
 import { trimMessages } from './memory/window.ts';
 import { runMemoryCommand } from './commands/memory.ts';
+import { runVectorCommand } from './commands/vector.ts';
 
 const SESSION_ID = 'default';
 
@@ -74,6 +75,16 @@ async function main() {
         await runMemoryCommand(history);
       } catch (e: any) {
         console.warn(`[/memory] 执行失败: ${e.message ?? e}`);
+      }
+      continue;
+    }
+
+    // 内置指令：/vector
+    if (userInput === '/vector') {
+      try {
+        await runVectorCommand();
+      } catch (e: any) {
+        console.warn(`[/vector] 执行失败: ${e.message ?? e}`);
       }
       continue;
     }
