@@ -4,6 +4,12 @@
 
 import { registerTool } from './registry.js';
 import readFileTool from './implementations/read_file.js';
+import bashTool from './implementations/bash.js';
+import writeFileTool from './implementations/write_file.js';
+import grepTool from './implementations/grep.js';
+import globTool from './implementations/glob.js';
+import confirmTool from './implementations/confirm.js';
+import selectTool from './implementations/select.js';
 import getLocationTool from './implementations/get_location.js';
 import searchRestaurantTool from './implementations/search_restaurant.js';
 import placeOrderTool from './implementations/place_order.js';
@@ -22,6 +28,12 @@ function wrap<T>(tool: { execute: (args: T) => Promise<any> }) {
 
 const localTools = [
   { ...readFileTool, wrap: wrap(readFileTool) },
+  { ...bashTool, wrap: wrap(bashTool) },
+  { ...writeFileTool, wrap: wrap(writeFileTool) },
+  { ...grepTool, wrap: wrap(grepTool) },
+  { ...globTool, wrap: wrap(globTool) },
+  { ...confirmTool, wrap: wrap(confirmTool) },
+  { ...selectTool, wrap: wrap(selectTool) },
   { ...getLocationTool, wrap: wrap(getLocationTool) },
   { ...searchRestaurantTool, wrap: wrap(searchRestaurantTool) },
   { ...placeOrderTool, wrap: wrap(placeOrderTool) },
@@ -33,6 +45,7 @@ const localTools = [
 // 同步注册本地工具（立即可用）
 for (const tool of localTools) {
   registerTool(tool.name, tool.description, tool.schema, tool.wrap);
+  console.log(`[Tool] 已注册: ${tool.name}`);
 }
 
 // 异步加载 MCP 工具
