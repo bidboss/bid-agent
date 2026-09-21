@@ -5,7 +5,7 @@
 import { registerAllMcpTools } from './tools/index.ts';
 import { listTools } from './tools/registry.ts';
 import { chatWithTools } from './tools/engine.ts';
-import { input } from '@inquirer/prompts';
+import readline from 'readline';
 import { HumanMessage } from '@langchain/core/messages';
 import { getModelConfig } from './config.ts';
 import { createChatModel } from './model.ts';
@@ -21,6 +21,7 @@ import { disconnectAllMcp } from './tools/mcp/loader.ts';
 import { trimMessages } from './memory/window.ts';
 import { runMemoryCommand } from './commands/memory.ts';
 import { runVectorCommand } from './commands/vector.ts';
+import { initFileCache, createEnhancedPrompt, enhancedQuestion } from './input/index.ts';
 
 const SESSION_ID = 'default';
 
@@ -60,12 +61,19 @@ async function main() {
     console.warn(`[MCP] 加载出错: ${error.message}`);
   }
 
+  // 初始化文件/设计图缓存（@ # 触发列表依赖）
+  initFileCache();
+
+  // 接管 readline 以支持 / @ # 触发候选列表
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  createEnhancedPrompt(rl);
+
   // summarizer 在循环外创建，避免每轮重复初始化模型
   const summarizer = await buildSummarizer();
 
   // 对话循环
   while (true) {
-    const userInput = (await input({ message: '问：' })).trim();
+    const userInput = (await enhancedQuestion('问：')).trim();
     if (!userInput) continue;
     if (userInput === 'exit' || userInput === 'quit') break;
 
@@ -124,6 +132,7 @@ async function main() {
     saveMessagesToFile(sessionFilePath, history, metaToSave);
   }
 
+  rl.close();
   await disconnectAllMcp();
   console.log('对话结束，会话已保存');
 }

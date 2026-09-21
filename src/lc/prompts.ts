@@ -13,6 +13,7 @@ import { loadAllMemory } from './memory/store.ts';
 import { searchMemory } from './memory/vector.ts';
 import { searchKb, renderKbRagTemplate } from './rag/index.ts';
 import { getSkillSummaryText } from './skills.ts';
+import { attachFilesToMessage, attachImagesToMessage } from './files/index.ts';
 import {
   parseFileTagsFromInput,
   matchRulesForFiles,
@@ -103,7 +104,9 @@ export async function buildSendMessages(
   messages.push(...buildRulesMessages(userInput));
 
   messages.push(...history);
-  messages.push(buildHumanMessage({ text: userInput }));
+  const expanded = attachImagesToMessage(userInput);
+  const enrichedText = attachFilesToMessage(expanded.text);
+  messages.push(buildHumanMessage({ text: enrichedText, images: expanded.images }));
 
   return messages;
 }
