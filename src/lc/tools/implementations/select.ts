@@ -1,5 +1,11 @@
-// select 工具：终端下拉选项选择
+// select 工具：终端选项选择
+// 使用 @inquirer/prompts 实现：
+//  - ↑↓ 切换焦点（原生支持）
+//  - Enter 确认
+//  - ESC / Ctrl+C 通过 CancelPromptError / ExitPromptError 检测并返回 success=false
+// stdin 由 inquirer.input/search/select/confirm 统一管理，避免与 readline 抢 stdin。
 import { select } from '@inquirer/prompts';
+import { CancelPromptError, ExitPromptError } from '@inquirer/core';
 import { z } from 'zod';
 
 const schema = z.object({
@@ -13,17 +19,22 @@ const schema = z.object({
 });
 
 async function execute(args: z.infer<typeof schema>) {
-  const { message, choices } = args;
-
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    return { success: false, content: '', error: '参数校验失败: ' + parsed.error.message };
+  }
+  const { message, choices } = parsed.data;
   try {
-    const answer = await select({ message, choices });
-    return {
-      success: true,
-      content: `用户选择了: ${answer}`,
-    };
+    const answer = await select({
+      message,
+      choices: choices.map((c) => ({ name: c.name, value: c.value })),
+    });
+    return { success: true, content: `用户选择了: ${answer}` };
   } catch (e: any) {
-    // inquirer 在非 TTY 环境可能抛异常
-    return { success: false, content: '', error: `选项选择失败: ${e.message}` };
+    if (e instanceof CancelPromptError || e instanceof ExitPromptError) {
+      return { success: false, content: '', error: '用户已取消' };
+    }
+    return { success: false, content: '', error: `选项选择失败: ${e.message ?? e}` };
   }
 }
 

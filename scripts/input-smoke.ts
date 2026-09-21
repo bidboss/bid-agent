@@ -1,63 +1,90 @@
-// input 启动冒烟：2 秒后强制退出，验证 readline/createEnhancedPrompt 不抛错
-import readline from 'readline';
-import { initFileCache, createEnhancedPrompt, enhancedQuestion } from '../src/lc/input/index.ts';
-import { scanProjectFiles, scanDesignImages } from '../src/lc/files/index.ts';
+// input 层纯函数冒烟测试：extractAttachments / buildFileContentBlocks
+// 不依赖 stdin、不发模型请求，可独立运行。
+// 运行：node --import tsx scripts/input-smoke.ts
 
-let failed = 0;
+import { extractAttachments } from '../src/lc/input.ts';
+import { buildFileContentBlocks } from '../src/lc/files/index.ts';
+
 let passed = 0;
-function assert(cond: unknown, msg: string) {
-  if (cond) {
-    passed++;
-    console.log('  PASS:', msg);
+let failed = 0;
+
+function eq<T>(actual: T, expected: T, label: string): void {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a === e) {
+    console.log(`  ✓ ${label}`);
+    passed += 1;
   } else {
-    failed++;
-    console.log('  FAIL:', msg);
+    console.log(`  ✗ ${label}`);
+    console.log(`    实际: ${a}`);
+    console.log(`    期望: ${e}`);
+    failed += 1;
   }
 }
 
-console.log('\n[1] initFileCache 不抛错');
-try {
-  initFileCache();
-  assert(true, 'initFileCache 完成');
-} catch (e: any) {
-  assert(false, `initFileCache 抛错: ${e.message}`);
+function ok(cond: boolean, label: string): void {
+  if (cond) {
+    console.log(`  ✓ ${label}`);
+    passed += 1;
+  } else {
+    console.log(`  ✗ ${label}`);
+    failed += 1;
+  }
 }
 
-console.log('\n[2] scanProjectFiles 返回数组');
-const files = scanProjectFiles();
-assert(Array.isArray(files), '返回数组');
-assert(files.length > 0, '至少含一个文件');
-assert(files.every((f) => !f.includes('\\')), '使用正斜杠');
+console.log('== extractAttachments ==');
 
-console.log('\n[3] scanDesignImages 不抛错（.front/design 不存在也返回空）');
-const imgs = scanDesignImages();
-assert(Array.isArray(imgs), '返回数组（可能为空）');
+// 单个 @
+eq(extractAttachments('@[src/app.ts]'),
+  { text: '', attachments: [{ type: '@', path: 'src/app.ts' }] },
+  '单个 @[path]');
 
-console.log('\n[4] createEnhancedPrompt + enhancedQuestion 启动 2s 后退出');
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-try {
-  createEnhancedPrompt(rl);
-  assert(true, 'createEnhancedPrompt 未抛错');
-} catch (e: any) {
-  assert(false, `createEnhancedPrompt 抛错: ${e.message}`);
+// @ 两侧有文本
+eq(extractAttachments('hello @[src/app.ts] world'),
+  { text: 'hello world', attachments: [{ type: '@', path: 'src/app.ts' }] },
+  '@ 两侧有文本');
+
+// 多个附件混合顺序
+eq(extractAttachments('a @[x.ts] b #[y.png] c'),
+  { text: 'a b c', attachments: [{ type: '@', path: 'x.ts' }, { type: '#', path: 'y.png' }] },
+  '@ 和 # 混合，顺序保留');
+
+// 多个同类型
+eq(extractAttachments('start @[a.ts] mid @[b.ts] end'),
+  { text: 'start mid end', attachments: [{ type: '@', path: 'a.ts' }, { type: '@', path: 'b.ts' }] },
+  '多个 @ 顺序保留');
+
+// 无附件
+eq(extractAttachments('plain text'),
+  { text: 'plain text', attachments: [] },
+  '无附件');
+
+// 空字符串
+eq(extractAttachments(''),
+  { text: '', attachments: [] },
+  '空字符串');
+
+// 只含附件但 text 全部由附件字符组成
+eq(extractAttachments('@[a.ts]#[b.png]'),
+  { text: '', attachments: [{ type: '@', path: 'a.ts' }, { type: '#', path: 'b.png' }] },
+  'text 全由附件字符组成 → text 为空');
+
+console.log('\n== buildFileContentBlocks ==');
+
+// 空数组
+eq(buildFileContentBlocks([]), [], '空数组');
+
+// 单个文件
+const blocks = buildFileContentBlocks(['package.json']);
+ok(blocks.length === 1, '单文件 → 1 个 block');
+ok(blocks[0].type === 'text', 'block 是 text 类型');
+ok(blocks[0].text.startsWith('## package.json'), 'text 以 ## filename 开头');
+ok(blocks[0].text.includes('```'), 'text 含代码块标记');
+
+console.log('\n== 总结 ==');
+console.log(`通过: ${passed}, 失败: ${failed}`);
+if (failed > 0) {
+  console.error('测试未通过');
+  process.exit(1);
 }
-
-// 启动 enhancedQuestion 但不阻塞主进程
-const promise = enhancedQuestion('问：').catch((e) => {
-  console.log('enhancedQuestion rejected:', e.message);
-});
-
-// 2 秒后：注入模拟的 Enter + 关闭
-setTimeout(() => {
-  // 模拟回车键直接提交
-  // 注意：无法在 keypress 监听里直接调 submitInput（不在导出里），改为直接 close readline
-  rl.close();
-  // 等待 promise 解析
-  setTimeout(() => {
-    assert(true, 'enhancedQuestion 启动未崩（已关闭）');
-    console.log(`\n--- 总结: ${passed} passed, ${failed} failed ---`);
-    process.exit(failed === 0 ? 0 : 1);
-  }, 500);
-}, 1500);
-
-void promise; // 保持 linter 安静
+console.log('全部通过');

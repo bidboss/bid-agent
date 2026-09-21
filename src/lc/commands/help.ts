@@ -1,5 +1,7 @@
 // /help 指令：打印所有内置指令与按键规范
 
+import { listCustomCommands } from './custom.ts';
+
 const HELP_TEXT = [
   '【内置指令】',
   '  /help      列出本帮助',
@@ -27,6 +29,15 @@ const HELP_TEXT = [
 ].join('\n');
 
 export function runHelpCommand(): void {
-  // eslint-disable-next-line no-console
   console.log(HELP_TEXT);
+
+  // 自定义指令分组（来自 .front/commands/）
+  const custom = listCustomCommands();
+  if (custom.length > 0) {
+    console.log('');
+    console.log('【自定义指令】（来自 .front/commands/）');
+    for (const c of custom) {
+      console.log(`  ${c.name.padEnd(16)} ${c.description}`);
+    }
+  }
 }

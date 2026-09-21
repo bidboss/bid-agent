@@ -1,19 +1,15 @@
-// 项目文件与设计图扫描、筛选、标签解析、内容附件。
-// 复刻 src/files/index.js 的语义，但完全自给自足，不引用 legacy 目录（AGENTS.md §3.6）。
+// 项目文件与设计图扫描、筛选、标签解析、内容附件
 
 import fs from 'fs';
 import path from 'path';
 import { getCurrentWorkingDir } from '../utils/pathUtils.ts';
+import type { ContentItem } from '../messages.ts';
 
 const excludeDirs = ['node_modules', '.git', '.front', '.claude', 'dist', 'build'];
 const excludeFiles = ['.DS_Store', 'Thumbs.db'];
 const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
 
-/**
- * 递归扫描目录获取所有文件（相对路径，使用正斜杠）。
- * @param dir 起始目录，默认当前工作目录
- * @param baseDir 用于计算相对路径的根目录，默认等于 dir
- */
+// 递归扫描目录获取所有文件（相对路径，使用正斜杠）
 export function scanProjectFiles(dir: string = getCurrentWorkingDir(), baseDir: string | null = null): string[] {
   if (!baseDir) baseDir = dir;
   const results: string[] = [];
@@ -41,18 +37,14 @@ export function scanProjectFiles(dir: string = getCurrentWorkingDir(), baseDir: 
   return results;
 }
 
-/**
- * 模糊筛选文件列表（大小写不敏感）。
- */
+// 模糊筛选文件列表（忽略大小写）
 export function filterFiles(files: string[], query: string): string[] {
   if (!query) return files;
   const lowerQuery = query.toLowerCase();
   return files.filter((file) => file.toLowerCase().includes(lowerQuery));
 }
 
-/**
- * 读取文件内容；读取失败返回占位字符串以避免阻塞流程。
- */
+// 读取文件内容；读取失败返回占位字符串以避免阻塞流程
 export function readFileContent(filepath: string): string {
   try {
     const fullPath = path.resolve(getCurrentWorkingDir(), filepath);
@@ -62,9 +54,7 @@ export function readFileContent(filepath: string): string {
   }
 }
 
-/**
- * 解析输入中的 @[filename] 标记，返回文件名列表。
- */
+// 解析输入中的 @[filename] 标记，返回文件名列表
 export function parseFileTags(input: string): string[] {
   const tagRegex = /@\[([^\]]+)\]/g;
   const files: string[] = [];
@@ -75,12 +65,7 @@ export function parseFileTags(input: string): string[] {
   return files;
 }
 
-/**
- * 把 @[file] 标记的文件内容追加到消息末尾。
- * - 解析所有 @[filename] 标记
- * - 读取每个文件，拼成 markdown 代码块追加到文本末尾
- * - 无标签时直接返回原文
- */
+// 把 @[file] 标记的文件内容追加到消息末尾
 export function attachFilesToMessage(input: string): string {
   const files = parseFileTags(input);
   if (files.length === 0) return input;
@@ -96,9 +81,7 @@ export function attachFilesToMessage(input: string): string {
   return result;
 }
 
-/**
- * 扫描 .front/design 目录下的图片文件名列表。
- */
+// 扫描 .front/design 目录下的图片文件名列表
 export function scanDesignImages(): string[] {
   const designDir = path.join(getCurrentWorkingDir(), '.front', 'design');
   if (!fs.existsSync(designDir)) return [];
@@ -113,18 +96,14 @@ export function scanDesignImages(): string[] {
   }
 }
 
-/**
- * 模糊筛选图片列表（大小写不敏感）。
- */
+// 模糊筛选图片列表（忽略大小写）
 export function filterImages(images: string[], query: string): string[] {
   if (!query) return images;
   const lowerQuery = query.toLowerCase();
   return images.filter((img) => img.toLowerCase().includes(lowerQuery));
 }
 
-/**
- * 解析输入中的 #[filename] 图片标记，返回图片文件名列表。
- */
+// 解析输入中的 #[filename] 图片标记，返回图片文件名列表
 export function parseImageTags(input: string): string[] {
   const tagRegex = /#\[([^\]]+)\]/g;
   const images: string[] = [];
@@ -135,23 +114,17 @@ export function parseImageTags(input: string): string[] {
   return images;
 }
 
-/**
- * 移除输入中的 #[filename] 图片标记（保留其他文字）。
- */
+// 移除输入中的 #[filename] 图片标记（保留其他文字）
 export function removeImageTags(input: string): string {
   return input.replace(/#\[([^\]]+)\]\s?/g, '').trim();
 }
 
-/**
- * 根据图片文件名获取 .front/design 下的绝对路径。
- */
+// 根据图片文件名获取 .front/design 下的绝对路径
 export function getDesignImagePath(imageName: string): string {
   return path.join(getCurrentWorkingDir(), '.front', 'design', imageName);
 }
 
-/**
- * mime 类型推断（基于扩展名）。
- */
+// mime 类型推断（基于扩展名）
 function inferMimeType(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
   switch (ext) {
@@ -171,13 +144,10 @@ function inferMimeType(filename: string): string {
   }
 }
 
-/**
- * 把输入中的 #[img] 标记展开为：
- * - text：剥离图片标记后的纯文本
- * - images：data:image/...;base64,... URL 列表（每张图一个），缺失文件时返回空数组
- *
- * 与 attachFilesToMessage 不同：图片走 vision 通道，必须以 image_url 形式传给模型。
- */
+// 把输入中的 #[img] 标记展开为：
+// - text：剥离图片标记后的纯文本
+// - images：data:image/...;base64,... URL 列表（每张图一个），缺失文件时返回空数组
+// 与 attachFilesToMessage 不同：图片走 vision 通道，必须以 image_url 形式传给模型。
 export function attachImagesToMessage(input: string): { text: string; images: string[] } {
   const tags = parseImageTags(input);
   const text = removeImageTags(input);
@@ -196,4 +166,19 @@ export function attachImagesToMessage(input: string): { text: string; images: st
   }
 
   return { text, images };
+}
+
+/**
+ * 把多个附件文件路径展开为多个独立的 text content block。
+ * 每个文件一个 block（## filename + 代码块），与图片 attachment 的独立 block 风格一致。
+ * 用于 prompts.buildSendMessages：让附件以多 content block 形式传给模型，而不是
+ * 把所有文件拼到一个 text 里。
+ */
+export function buildFileContentBlocks(filePaths: string[]): ContentItem[] {
+  const blocks: ContentItem[] = [];
+  for (const file of filePaths) {
+    const content = readFileContent(file);
+    blocks.push({ type: 'text', text: `## ${file}\n\`\`\`\n${content}\n\`\`\`` });
+  }
+  return blocks;
 }

@@ -1,11 +1,15 @@
-// 启动入口：inquirer 循环 + 拼装消息 + 调模型（含工具循环） + 存会话 |
+// 启动入口：composedDriver 状态机 + 拼装消息 + 调模型（含工具循环） + 存会话 |
 // 每次只需要在启动会话时加载一次 配置、模型、会话文件，后续每轮对话只需要拼装消息、调模型、存会话。
+//
+// 输入流（Cursor 风格）：
+// - 用户敲入 / 立即弹指令候选，选中即执行
+// - 用户敲入 @ / # 立即弹附件候选，选中追加到 buffer
+// - 回车发送：拆为 text + attachments，attachments 作为独立 content block 传给模型
 
 // 触发本地工具注册（导入会同步注册本地工具）
 import { registerAllMcpTools } from './tools/index.ts';
 import { listTools } from './tools/registry.ts';
 import { chatWithTools } from './tools/engine.ts';
-import readline from 'readline';
 import { HumanMessage } from '@langchain/core/messages';
 import { getModelConfig } from './config.ts';
 import { createChatModel } from './model.ts';
@@ -24,12 +28,12 @@ import { runVectorCommand } from './commands/vector.ts';
 import { runHelpCommand } from './commands/help.ts';
 import { runClearCommand } from './commands/clear.ts';
 import { runContextCommand } from './commands/context.ts';
+import { runCustomCommand } from './commands/custom.ts';
 import {
   initFileCache,
-  createEnhancedPrompt,
-  enhancedQuestion,
-  setOnExitRequest,
-} from './input/index.ts';
+  composedDriver,
+  type ComposedInput,
+} from './input.ts';
 
 const SESSION_ID = 'default';
 
@@ -72,21 +76,16 @@ async function main() {
   // 初始化文件/设计图缓存（@ # 触发列表依赖）
   initFileCache();
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  createEnhancedPrompt(rl);
-
-  // 退出请求回调（Ctrl+C 或 /exit /quit 时调用）
+  // 退出请求回调（inquirer prompt 被 ESC / Ctrl+C 取消时调用）
   let exiting = false;
   const requestExit = (): void => {
     if (exiting) return;
     exiting = true;
     Promise.resolve(disconnectAllMcp()).catch(() => {});
-    rl.close();
     // eslint-disable-next-line no-console
     console.log('\n对话结束，会话已保存');
     process.exit(0);
   };
-  setOnExitRequest(requestExit);
 
   // 指令分派表：内置指令在此集中维护
   const commandHandlers: Record<string, () => Promise<void>> = {
@@ -104,28 +103,9 @@ async function main() {
 
   const summarizer = await buildSummarizer();
 
-  // 对话循环
-  while (true) {
-    const userInput = (await enhancedQuestion('问：')).trim();
-    if (!userInput) continue;
-
-    // 裸字符串 exit / quit（向后兼容）
-    if (userInput === 'exit' || userInput === 'quit') {
-      requestExit();
-      break;
-    }
-
-    // 内置指令查表分发
-    if (commandHandlers[userInput]) {
-      try {
-        await commandHandlers[userInput]();
-      } catch (e: any) {
-        // eslint-disable-next-line no-console
-        console.warn(`[${userInput}] 执行失败: ${e.message ?? e}`);
-      }
-      continue;
-    }
-
+  // 一轮普通对话：拼消息 → 调引擎 → 落库。被主循环与自定义指令 passthrough 共用。
+  // input 既可以是 string（自定义指令 passthrough 路径），也可以是 ComposedInput（@ # 附件路径）。
+  const runOneTurn = async (input: string | ComposedInput): Promise<void> => {
     // 每轮重新 bind，捕获 MCP 后续加载的工具
     const boundModel = model.bindTools(listTools());
 
@@ -136,8 +116,9 @@ async function main() {
     });
 
     // 拼装本轮消息（用 sendHistory，发给模型的上下文可含摘要）
-    const sendMessages = await buildSendMessages(sendHistory, userInput);
+    const sendMessages = await buildSendMessages(sendHistory, input);
 
+    // eslint-disable-next-line no-console
     console.log('sendMessages 发送给模型的消息：', sendMessages);
 
     // 调用引擎（工具循环）
@@ -146,7 +127,9 @@ async function main() {
     toolCallLog(toolCallRecords);
     aiReplyLog(newMessages);
 
-    history.push(new HumanMessage(userInput));
+    // 写入短期 history：用 buffer 回显（含 @[#] 标签，方便用户查看）
+    const echoText = typeof input === 'string' ? input : input.buffer;
+    history.push(new HumanMessage(echoText));
 
     for (const msg of newMessages) {
       history.push(msg);
@@ -159,6 +142,58 @@ async function main() {
       created_at,
     };
     saveMessagesToFile(sessionFilePath, history, metaToSave);
+  };
+
+  // 对话循环：composedDriver 返回 discriminated union，分派到对应路径
+  while (!exiting) {
+    const result = await composedDriver('问：');
+    if (result.action === 'exit') {
+      requestExit();
+      break;
+    }
+    if (result.action === 'empty') continue;
+
+    if (result.action === 'command') {
+      // / 选中指令：立即执行
+      const cmdName = result.command;
+      if (commandHandlers[cmdName]) {
+        try {
+          await commandHandlers[cmdName]();
+        } catch (e: any) {
+          // eslint-disable-next-line no-console
+          console.warn(`[${cmdName}] 执行失败: ${e.message ?? e}`);
+        }
+        continue;
+      }
+      // 自定义指令：拆 args（/ 选中后通常不带 args，自定义指令可为空 args）
+      const customResult = runCustomCommand(cmdName, '');
+      if (customResult) {
+        if (customResult.kind === 'print') {
+          // eslint-disable-next-line no-console
+          console.log(customResult.content);
+          continue;
+        }
+        // passthrough：把模板正文作为附加段走正常对话循环
+        try {
+          await runOneTurn(customResult.content);
+        } catch (e: any) {
+          // eslint-disable-next-line no-console
+          console.warn(`[${cmdName}] 执行失败: ${e.message ?? e}`);
+        }
+        continue;
+      }
+      // eslint-disable-next-line no-console
+      console.warn(`未找到指令: ${cmdName}`);
+      continue;
+    }
+
+    // result.action === 'message'：附件路径
+    try {
+      await runOneTurn(result.input);
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.warn(`[对话] 执行失败: ${e.message ?? e}`);
+    }
   }
 }
 

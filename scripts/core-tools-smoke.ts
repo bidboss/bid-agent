@@ -29,7 +29,7 @@ async function main() {
   }
 
   console.log('\n=== 2. executeTool 返回 ToolResult 格式 ===');
-  for (const name of TOOL_NAMES) {
+  for (const name of ['bash', 'write_file', 'grep', 'glob']) {
     const r = await executeTool(name, {});
     check(
       `${name} 返回 {success, content, error?}`,
@@ -69,12 +69,52 @@ async function main() {
   check('bash 执行 echo 成功', bashRes.success === true, bashRes.content);
   check('bash 输出包含 smoke-ok', bashRes.content.includes('smoke-ok'), bashRes.content);
 
-  console.log('\n=== 5. 交互式工具（confirm / select）只验证注册，不实际触发 ===');
-  // 这两个工具依赖 @inquirer/prompts 真实 TTY，自动化 smoke 中无法可靠触发
-  // 只验证它们在 registry 里能被查到
+  console.log('\n=== 5. 交互式工具（confirm / select）schema 校验 + 注册检查 ===');
+  // 这两个工具依赖终端 stdin，自动化 smoke 中无法实际触发
+  // 验证：schema 注册正确 + 调用时缺失参数会返回 success=false
+  const confirmMissing = await executeTool('confirm', {});
+  check('confirm 缺参数返回 success=false', confirmMissing.success === false);
+
+  const selectMissing = await executeTool('select', {});
+  check('select 缺参数返回 success=false', selectMissing.success === false);
+
+  const selectWrongType = await executeTool('select', { message: '?', choices: 'not-an-array' });
+  check('select choices 类型错误返回 success=false', selectWrongType.success === false);
+
   const { getTool } = await import('../src/lc/tools/registry.ts');
   check('confirm 在 registry 中可获取', getTool('confirm') !== undefined);
   check('select 在 registry 中可获取', getTool('select') !== undefined);
+
+  console.log('\n=== 6. 输入层（input.ts）单元校验 ===');
+  // 这些函数依赖 inquirer 全栈 prompt，自动化时无法实跑（会卡在 stdin）
+  // 验证：模块可加载、纯函数 formatSelection 行为正确、缓存初始化不抛错
+  const inputModule = await import('../src/lc/input.ts');
+  check('input.ts 可加载', typeof inputModule.promptUser === 'function');
+  check('input.ts 导出 searchCandidate', typeof inputModule.searchCandidate === 'function');
+  check('input.ts 导出 formatSelection', typeof inputModule.formatSelection === 'function');
+  check('input.ts 导出 initFileCache', typeof inputModule.initFileCache === 'function');
+
+  // formatSelection 纯函数行为
+  const cmdJoined = inputModule.formatSelection('/', '/help', '');
+  check('/ 触发：拼成 "/help "', cmdJoined === '/help ');
+
+  const fileJoined = inputModule.formatSelection('@', 'src/app.ts', '');
+  check('@ 触发：包成 @[src/app.ts]', fileJoined === '@[src/app.ts] ');
+
+  const imgJoined = inputModule.formatSelection('#', 'mockup.png', '');
+  check('# 触发：包成 #[mockup.png]', imgJoined === '#[mockup.png] ');
+
+  // 保留 baseInput（如 "帮我看 " + "@[file] "）
+  const withBase = inputModule.formatSelection('@', 'src/app.ts', '帮我看 ');
+  check('formatSelection 保留 baseInput', withBase === '帮我看 @[src/app.ts] ');
+
+  // initFileCache 不抛错（不验证具体值）
+  try {
+    inputModule.initFileCache();
+    check('initFileCache 执行无异常', true);
+  } catch (e: any) {
+    check('initFileCache 执行无异常', false, e.message);
+  }
 
   console.log(`\n=== 结果: ${pass} 通过 / ${fail} 失败 ===`);
   process.exit(fail === 0 ? 0 : 1);
