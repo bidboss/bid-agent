@@ -21,7 +21,15 @@ import { disconnectAllMcp } from './tools/mcp/loader.ts';
 import { trimMessages } from './memory/window.ts';
 import { runMemoryCommand } from './commands/memory.ts';
 import { runVectorCommand } from './commands/vector.ts';
-import { initFileCache, createEnhancedPrompt, enhancedQuestion } from './input/index.ts';
+import { runHelpCommand } from './commands/help.ts';
+import { runClearCommand } from './commands/clear.ts';
+import { runContextCommand } from './commands/context.ts';
+import {
+  initFileCache,
+  createEnhancedPrompt,
+  enhancedQuestion,
+  setOnExitRequest,
+} from './input/index.ts';
 
 const SESSION_ID = 'default';
 
@@ -64,35 +72,56 @@ async function main() {
   // 初始化文件/设计图缓存（@ # 触发列表依赖）
   initFileCache();
 
-  // 接管 readline 以支持 / @ # 触发候选列表
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   createEnhancedPrompt(rl);
 
-  // summarizer 在循环外创建，避免每轮重复初始化模型
+  // 退出请求回调（Ctrl+C 或 /exit /quit 时调用）
+  let exiting = false;
+  const requestExit = (): void => {
+    if (exiting) return;
+    exiting = true;
+    Promise.resolve(disconnectAllMcp()).catch(() => {});
+    rl.close();
+    // eslint-disable-next-line no-console
+    console.log('\n对话结束，会话已保存');
+    process.exit(0);
+  };
+  setOnExitRequest(requestExit);
+
+  // 指令分派表：内置指令在此集中维护
+  const commandHandlers: Record<string, () => Promise<void>> = {
+    '/help':    async () => runHelpCommand(),
+    '/clear':   async () => {
+      runClearCommand();
+      history.length = 0;
+    },
+    '/context': async () => runContextCommand(history, sessionFilePath),
+    '/exit':    async () => requestExit(),
+    '/quit':    async () => requestExit(),
+    '/memory':  async () => { await runMemoryCommand(history); },
+    '/vector':  async () => { await runVectorCommand(); },
+  };
+
   const summarizer = await buildSummarizer();
 
   // 对话循环
   while (true) {
     const userInput = (await enhancedQuestion('问：')).trim();
     if (!userInput) continue;
-    if (userInput === 'exit' || userInput === 'quit') break;
 
-    // 内置指令：/memory
-    if (userInput === '/memory') {
-      try {
-        await runMemoryCommand(history);
-      } catch (e: any) {
-        console.warn(`[/memory] 执行失败: ${e.message ?? e}`);
-      }
-      continue;
+    // 裸字符串 exit / quit（向后兼容）
+    if (userInput === 'exit' || userInput === 'quit') {
+      requestExit();
+      break;
     }
 
-    // 内置指令：/vector
-    if (userInput === '/vector') {
+    // 内置指令查表分发
+    if (commandHandlers[userInput]) {
       try {
-        await runVectorCommand();
+        await commandHandlers[userInput]();
       } catch (e: any) {
-        console.warn(`[/vector] 执行失败: ${e.message ?? e}`);
+        // eslint-disable-next-line no-console
+        console.warn(`[${userInput}] 执行失败: ${e.message ?? e}`);
       }
       continue;
     }
@@ -131,17 +160,7 @@ async function main() {
     };
     saveMessagesToFile(sessionFilePath, history, metaToSave);
   }
-
-  rl.close();
-  await disconnectAllMcp();
-  console.log('对话结束，会话已保存');
 }
-
-// Ctrl+C 优雅关闭：避免 stdio MCP 子进程残留
-process.on('SIGINT', async () => {
-  await disconnectAllMcp().catch(() => {});
-  process.exit(0);
-});
 
 // 执行主函数
 try {
