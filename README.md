@@ -2,215 +2,265 @@
 
 仓库地址：https://github.com/bidboss/bid-agent
 
-面向前端开发的 AI 终端助手（CLI），在本地终端中对话、读写代码、检索项目、调用工具，并支持设计稿对照与页面调试。定位类似 Claude Code，技术栈为 Node.js + ESM + OpenAI 兼容接口。
+面向前端开发的 AI 终端助手（CLI），在本地终端中对话、读写代码、检索项目、调用工具，并支持设计稿对照与页面调试。定位类似 Claude Code，技术栈为 Node.js + TypeScript + LangChain + OpenAI 兼容接口。
 
 ---
 
-## 产品价值
+## 一、产品价值
 
 - **终端内闭环开发**：提问 → 读代码 → 改文件 → 确认 → 调试截图 → 对比设计图，减少 IDE 与聊天工具之间的来回切换。
-- **项目级上下文**：自动注入系统提示、`.front.md`、记忆、Skills、Rules、RAG 检索结果，回答更贴合当前仓库与个人习惯。
+- **项目级上下文**：自动注入系统提示（`.front/AGENTS.md`）、长期记忆、Skills、Rules、RAG 检索结果，回答更贴合当前仓库与个人习惯。
+- **短期记忆窗口**：按 token 数自动压缩历史（默认 400 tokens），被截掉的轮次用 LLM 摘要保留关键事实。
 - **可扩展工具层**：本地 Function Tools 与 MCP 统一注册，可接外部服务而不改核心对话循环。
-- **前端工作流友好**：`@` 附加源码、`#` 附加设计图、Playwright 页面调试、视觉 diff，贴合 UI 落地场景。
-- **用户 / 项目双层配置**：`~/.front` 与项目 `.front` 分层，偏好与项目规范互不干扰。
+- **前端工作流友好**：`@` 附加源码、`#` 附加设计图、Playwright 页面调试。
+- **用户 / 项目双层配置**：`~/.front` 与 `.front` 分层，偏好与项目规范互不干扰。
 
 ---
 
-## 功能介绍
+## 二、功能介绍
 
-### 对话与上下文
+### 1. 对话与上下文
 
 | 能力 | 说明 |
 |------|------|
 | 多轮对话 | 维护 `messages` 历史，支持工具调用后再追问 |
-| 系统角色 | `src/docs/systemDoc.md` 定义前端助手行为与安全边界 |
-| 用户 / 项目说明 | 读取 `~/.front/.front.md` 与项目根 `.front.md` |
-| 长期记忆 | `.front/memory/memory.md`（用户级 + 项目级） |
-| Skills | `.front/skills/*/SKILL.md`，启动时注入摘要，按需 `skill` 工具加载全文 |
-| Rules | `.front/rules/*.md`，按 glob 匹配 `@` 选中的文件后附加 |
-| RAG | LanceDB 向量检索 `.front/doc` 文档，相关片段注入对话 |
+| 系统角色 | 读取项目 `.front/AGENTS.md`（支持 frontmatter 定义 name / version / tools 等） |
+| 长期记忆 | `.front/memory/memory.md`（用户级 + 项目级），`/memory` 指令触发写入 |
+| 短期记忆窗口 | 按 token 数截断历史，被截段用 LLM 摘要替代（`length / 3` 估算） |
+| Skills | `.front/skills/<name>/SKILL.md`，启动时扫描并注入摘要（tier=1 默认），按需 `skill_load` 加载全文 |
+| Rules | `.front/rules/*.md`，按 glob 匹配 `@[file]` 选中的文件后自动附加 |
+| RAG 知识库 | `.front/kb/`（用户级 + 项目级）文档向量化入库，`/vector` 触发索引，按 query 召回 top-4 片段注入对话 |
+| 会话持久化 | JSON 文件落盘（`.front/sessions/<userId>/default.json`），退出时自动保存 |
 
-### 终端交互增强
+### 2. 终端增强输入（Cursor 风格 composedDriver）
 
-输入时触发：
+输入框以回车为分界，触发符规则：
 
-- **`/`**：指令列表（↑↓ 选择，Tab 确认）
-- **`@`**：项目文件列表，选中后以 `@[path]` 附加文件内容
-- **`#`**：`.front/design` 下设计图，选中后以 `#[name]` 作为多模态图片发送
+- **`/`**：弹出指令下拉候选（内置 + 自定义），选中立即执行
+- **`@`**：弹出项目文件候选，选中后追加 `@[path]` 标签到输入缓冲区，继续编辑后再按回车发送
+- **`#`**：弹出 `.front/design` 图片候选，选中后追加 `#[name]` 标签，以 `image_url`（data URI）形式注入模型
 
-### 内置指令
+三个附件（`@` 文件、`#` 图片）作为独立 content block 传给 LangChain，不混入纯文本。
+
+### 3. 内置指令
 
 | 指令 | 作用 |
 |------|------|
 | `/help` | 帮助与使用技巧 |
-| `/clear` | 清空对话历史 |
-| `/context` | 查看当前上下文摘要（非阻断，会附带给模型） |
-| `/vector [file]` | 将文档或指定文件向量化入库 |
-| `/memory` | 让模型分析并写入记忆 |
-| `/exit` / `/quit` | 退出（退出时写入历史） |
-| 自定义指令 | `.front/commands/<组>/<名>.md` → `/组:名` |
+| `/clear` | 清空当前对话历史（磁盘文件保留） |
+| `/context` | 查看当前会话状态（消息数 / token 估算 / 文件路径） |
+| `/memory` | 让模型分析并写入长期记忆 |
+| `/vector` | 将 `.front/kb` 文档向量化并存入知识库 |
+| `/exit` / `/quit` | 退出并保存会话（Ctrl+C / ESC 等价） |
+| 自定义指令 | `.front/commands/<组>/<名>.md` → `/组:名`（passthrough 追加正文 或 print 直接打印） |
 
-### 本地工具（Function Calling）
+### 4. 本地工具（Function Calling）
 
 | 工具 | 作用 |
 |------|------|
-| `read_file` / `write_file` | 读写文件 |
-| `grep` / `glob` | 搜索与按模式找文件 |
+| `read_file` | 读取文件内容 |
+| `write_file` | 写入或覆盖文件 |
+| `grep` | 按正则搜索文件内容 |
+| `glob` | 按模式匹配项目文件 |
 | `bash` | 执行 shell 命令 |
-| `confirm` / `select` | 终端确认与选项交互 |
-| `skill` | 加载 Skill 全文 |
-| `memory_get` / `memory_save` | 读取 / 保存记忆 |
-| `debugger_page` | Playwright 打开页面，抓控制台与截图 |
-| `diff_pic` | 对比设计图与测试截图差异 |
+| `confirm` | 终端确认交互（是 / 否） |
+| `select` | 终端选项交互（单选） |
+| `memory_get` | 读取长期记忆（项目级 / 用户级） |
+| `memory_save` | 保存长期记忆（追加模式） |
+| `skill_load` | 按 name 加载完整 Skill 内容 |
+| `get_location` | 演示工具：获取地理位置 |
+| `search_restaurant` | 演示工具：搜索餐厅 |
+| `place_order` | 演示工具：下单 |
 
-### MCP 扩展
+### 5. MCP 扩展
 
-在 `.front/settings.json` 的 `mcpServer` 中配置 HTTP / SSE / stdio 服务后，工具会以 `服务名__工具名` 形式并入同一工具列表。
+在 `.front/settings.json` 的 `mcpServer` 中配置 HTTP / SSE / stdio 服务后，工具以 `<服务名>__<工具名>` 形式并入同一工具列表。
 
----
+### 6. 设计稿与调试
 
-## 实现架构
-
-### 总体流程
-
-```text
-用户输入 (readline + 增强键控)
-        │
-        ├─ / 指令 ──► commands（阻断 / 非阻断）
-        ├─ @[file] ──► 附加文件 + 匹配 Rules
-        ├─ #[image] ──► 设计图转 base64
-        └─ RAG 检索 ──► 相关文档片段
-                │
-                ▼
-        context + messages
-                │
-                ▼
-     OpenAI 兼容 Chat Completions
-     （tools = 本地工具 ∪ MCP 工具）
-                │
-        ┌───────┴────────┐
-        │ 有 tool_calls   │ 无 → 打印 Markdown 回复
-        ▼                │
-   excuteTool(...)       │
-   结果写入 messages     │
-        └──────► 再次请求 ◄┘
-```
-
-### 分层说明
-
-| 层级 | 目录 / 模块 | 职责 |
-|------|-------------|------|
-| 入口 | `src/app.js` | CLI 启动、对话循环、拼装上下文与用户消息 |
-| 输入 | `src/input/` | `/` `@` `#` 补全与行编辑 |
-| 指令 | `src/commands/` | 内置与自定义指令 |
-| 文件 / 设计图 | `src/files/` | 扫描、标签解析、Rules 匹配、设计图路径 |
-| 请求 | `src/request/` | 读配置、创建 OpenAI 客户端、工具调用循环 |
-| 工具 | `src/tools/` | 本地工具注册 + MCP 合并与执行 |
-| 上下文 | `src/utils/contextRead.js` 等 | System / 记忆 / Skills / Rules |
-| RAG | `src/utils/ragHandle.js` | 文档切分、embedding、LanceDB |
-| 提示模板 | `src/docs/` | 发给模型的 Markdown 模板 |
-
-### 配置优先级
-
-1. **API**：项目 `.front/settings.json` → 用户 `~/.front/settings.json`
-2. **MCP / 自定义指令 / Skills / Rules / 文档**：用户目录与项目目录合并，**项目侧同名覆盖用户侧**
-3. **工作目录**：以 `process.cwd()` 为项目根，工具读写默认不越界
-
-### 运行时数据目录（`.front`）
-
-```text
-.front/
-├── settings.json      # apiKey、baseURL、model、mcpServer
-├── memory/            # 长期记忆
-├── doc/               # RAG 源文档（md / txt / docx）
-├── langcedb-data/     # LanceDB 向量库
-├── design/            # 设计稿图片（# 选择）
-├── screenshot/        # debugger_page 截图
-├── rules/             # 路径匹配规则
-├── skills/            # Skill 包
-└── commands/          # 自定义指令
-```
-
-用户级同样使用 `~/.front/`（另含 `history/<项目名>/` 对话历史等）。
+- `.front/design/` 存放设计稿图片（png / jpg / gif / bmp / webp），`#` 触发选择后以 vision 图片注入
+- Playwright 截图能力（工具由 MCP 扩展提供）
 
 ---
 
-## 目录结构
+## 三、技术栈
 
-```text
-code/
-├── package.json              # 包名 frontcode，bin: front → src/app.js
-├── .front.md                 # 项目级说明（注入上下文）
-├── .front/                   # 项目级运行时配置与资源（见上）
-└── src/
-    ├── app.js                # 启动入口
-    ├── commands/             # 指令系统
-    ├── docs/                 # 系统提示与各类模板
-    │   ├── systemDoc.md
-    │   ├── userContext.md
-    │   ├── skillTemplate.md
-    │   ├── ragTemplate.md
-    │   └── memoryTemplate.md
-    ├── files/                # 文件 / 设计图 / Rules 匹配
-    ├── input/                # 增强终端输入
-    ├── request/              # OpenAI 客户端与对话请求
-    ├── tools/
-    │   ├── index.js          # 合并本地 + MCP，excuteTool
-    │   ├── util.js           # 工具定义转 OpenAI 协议
-    │   ├── mcp/              # MCP 连接与工具拉取
-    │   └── local/            # 各本地工具（一工具一文件）
-    └── utils/                # 日志、路径、记忆、RAG、调试等
-```
+### 运行时与语言
 
-**工具开发约定**：在 `src/tools/local/` 新增同名模块（参考 `skill.js`：`define` + `handle`），并在 `local/index.js` 中 `registerTool`。项目使用 **ESM**（`"type": "module"`），语言为 **JavaScript**（非 TypeScript）。
+- Node.js 18+ / ESM（`"type": "module"`）
+- TypeScript（strict 模式 + tsx 执行）
+
+### AI 与编排
+
+| 依赖 | 用途 |
+|------|------|
+| `@langchain/core` | 消息类型、ToolMessage、SystemMessage、HumanMessage、AIMessage |
+| `@langchain/openai` | ChatOpenAI 工厂 |
+| `@langchain/textsplitters` | 文档切分（RAG chunkSize=500 / overlap=80） |
+
+### 工具与扩展
+
+| 依赖 | 用途 |
+|------|------|
+| `@modelcontextprotocol/sdk` | MCP 客户端（Stdio / SSE / StreamableHTTP） |
+| `openai` | Embedding 调用（直连网关） |
+
+### 向量库与文档
+
+| 依赖 | 用途 |
+|------|------|
+| `@lancedb/lancedb` | 本地向量库（`.front/lancedb-data/`） |
+| `mammoth` | docx 文本提取（RAG） |
+| `gray-matter` | AGENTS.md frontmatter 解析 |
+
+### 终端交互
+
+| 依赖 | 用途 |
+|------|------|
+| `@inquirer/prompts` | 指令 / 文件 / 图片候选下拉 |
+| `ora` | 加载态 |
+| `chalk` | 终端彩色文字 |
+| `marked` + `marked-terminal` | Markdown 终端渲染 |
+| `ansi-escapes` | 光标与终端控制 |
+
+### 页面调试
+
+| 依赖 | 用途 |
+|------|------|
+| `playwright` | 页面调试与截图（由 MCP 扩展使用） |
+| `minimatch` | Rules glob 匹配 |
+
+### 工程
+
+- `tsx`（开发执行） / `typescript` / `@types/node`
 
 ---
 
-## 启动方式
+## 四、目录结构
 
-### 环境要求
+```
+src/lc/                          # LC 引擎（全部 TypeScript）
+├── app.ts                       # CLI 入口：composedDriver 状态机 + 对话主循环
+├── agents.ts                    # 读取 .front/AGENTS.md，渲染系统提示模板
+├── config.ts                    # 配置归一化（项目级 vs 用户级 settings.json）
+├── model.ts                     # ChatOpenAI 工厂
+├── messages.ts                  # 消息构造（buildHumanMessage / buildAIMessage 等）
+├── prompts.ts                   # buildSendMessages：上下文拼装（System → 记忆 → Skills → RAG → Rules → history → user）
+├── session.ts                   # 会话 JSON 持久化（load / save）
+├── input.ts                     # composedDriver：终端输入 + @ / # / 触发符处理
+├── log.ts                       # 工具调用记录 + AI 回复日志（chalk + marked 渲染）
+├── type.ts                      # EmbeddingConfig / ModelConfig / CreateChatModelOptions
+├── rules.ts                     # Rules glob 匹配（minimatch）
+├── skills.ts                    # Skills 扫描与摘要注入
+├── utils/pathUtils.ts           # 路径工具（cwd / homeDir）
+├── commands/                    # 内置指令
+│   ├── help.ts                 # /help
+│   ├── clear.ts                # /clear
+│   ├── context.ts              # /context
+│   ├── memory.ts               # /memory
+│   ├── vector.ts               # /vector
+│   └── custom.ts               # 自定义指令（mtime 缓存）
+├── files/                       # 文件 / 设计图扫描与标签解析
+│   └── index.ts               # scanProjectFiles / scanDesignImages / attachFilesToMessage 等
+├── memory/                      # 记忆体系
+│   ├── index.ts               # 对外统一出口
+│   ├── store.ts               # .front/memory/memory.md 读写
+│   ├── window.ts              # 短期窗口压缩（按 token 截断 + LLM 摘要）
+│   ├── vector.ts              # 向量记忆索引与召回（LanceDB memory_embeddings 表）
+│   ├── prompt.ts              # 记忆渲染模板
+│   └── type.ts                # 类型定义
+├── rag/                         # 知识库 RAG
+│   ├── index.ts               # 对外统一出口
+│   ├── kb.ts                 # .front/kb/ 文档索引（LanceDB kb_embeddings 表）
+│   ├── search.ts             # 向量召回
+│   ├── template.ts           # RAG 渲染模板（docs/ragTemplate.md + DEFAULT_TEMPLATE）
+│   └── type.ts               # 类型定义
+├── tools/                       # 工具引擎
+│   ├── engine.ts              # chatWithTools：工具循环（MAX 5 轮）
+│   ├── index.ts              # 同步注册 13 个本地工具 + 暴露 registerAllMcpTools
+│   ├── registry.ts            # 工具注册表（registerTool / listTools / executeTool）
+│   ├── type.ts                # 工具类型
+│   ├── implementations/        # 13 个本地工具实现
+│   │   ├── bash.ts
+│   │   ├── confirm.ts
+│   │   ├── get_location.ts
+│   │   ├── glob.ts
+│   │   ├── grep.ts
+│   │   ├── memory_get.ts
+│   │   ├── memory_save.ts
+│   │   ├── place_order.ts
+│   │   ├── read_file.ts
+│   │   ├── search_restaurant.ts
+│   │   ├── select.ts
+│   │   ├── skill_load.ts
+│   │   └── write_file.ts
+│   └── mcp/                   # MCP 扩展
+│       ├── loader.ts           # loadMcpServers / disconnectAllMcp
+│       ├── adapter.ts          # registerMcpTools：SDK → LangChain ToolDefinition
+│       └── types.ts           # MCP 配置类型
+└── types/                       # 第三方库 .d.ts
+    └── marked-terminal.d.ts
 
-- Node.js（建议 18+）
-- 可访问的 OpenAI 兼容 API（默认示例为通义 DashScope Compatible Mode）
-- 使用页面调试时需能运行 Playwright（首次可能需安装浏览器）
+scripts/                          # 冒烟自检脚本（ts / mjs / mts）
+├── smoke-lc.mjs               # LC 引擎冒烟（配置 → 模型 → 流式）
+├── app-smoke.ts
+├── core-tools-smoke.ts
+├── custom-commands-smoke.mts
+├── files-smoke.ts
+├── input-smoke.ts
+├── memory-smoke.ts
+├── rag-smoke.ts
+├── skill-smoke.ts
+└── commands-smoke.mts
 
-### 安装
+docs/                            # 设计 / 调研文档（沉淀目录）
+改造/                            # 迁移记录（plan / 评估报告）
+.front/                          # 运行时数据（项目级）
+```
+
+---
+
+## 五、启动方式
+
+### 1. 环境要求
+
+- Node.js 18+
+- 可访问的 OpenAI 兼容 API（示例：DeepSeek / 通义 DashScope Compatible Mode）
+- 页面调试时需要 Playwright 浏览器
+
+### 2. 安装
 
 ```bash
-cd /path/to/code
 npm install
-```
-
-可选：全局链接 CLI（`package.json` 的 `bin.front`）：
-
-```bash
+# 可选：全局链接
 npm link
 # 之后可在任意目录执行
 front
 ```
 
-### 配置 API
+### 3. 启动命令
 
-在项目或用户目录创建配置文件：
+| 命令 | 作用 |
+|------|------|
+| `npm run dev` | 开发模式（tsx + 读取 .env） |
+| `npm run smoke` | LC 引擎冒烟自检（配置 → 模型 → 流式） |
+| `npm run typecheck` | tsc --noEmit |
+| `npm run build` | tsc 编译 |
+| `npx front` | CLI 启动（bin 入口：`src/lc/app.ts`） |
 
-```bash
-mkdir -p .front
-```
+### 4. 配置 API（.front/settings.json）
 
-写入 `.front/settings.json`（勿将真实密钥提交到仓库）：
-
-```json
-{
-  "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "apiKey": "你的_API_Key",
-  "model": "qwen3.6-plus"
-}
-```
-
-可选 MCP 示例字段：
+搜索顺序：项目 `.front/settings.json` → 用户 `~/.front/settings.json`（项目级同名覆盖用户级）。
 
 ```json
 {
+  "baseURL": "https://api.deepseek.com/v1",
+  "apiKey": "sk-xxx",
+  "model": "deepseek-flash",
+  "userId": "可选，默认 os.userInfo().username",
+  "embedding": {
+    "model": "可选，独立 embedding 网关；未配置时 RAG 静默降级返回空"
+  },
   "mcpServer": {
     "demo": {
       "type": "stdio",
@@ -221,46 +271,139 @@ mkdir -p .front
 }
 ```
 
-`type` 支持：`stdio`、`sse`、`http` / `streamablehttp`。
+字段说明：
 
-### 运行
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `baseURL` | 是 | OpenAI 兼容 API 地址 |
+| `apiKey` | 是 | 密钥 |
+| `model` | 否 | 默认 `deepseek-flash` |
+| `userId` | 否 | 会话归属，未设置取系统用户名 |
+| `embedding` | 否 | RAG / 向量记忆专用，可独立 baseURL/apiKey；未配置时向量功能静默降级 |
+| `mcpServer` | 否 | MCP 服务集合（`type`: stdio / sse / http / streamablehttp） |
 
-在目标前端项目目录下启动（上下文与文件扫描以当前工作目录为准）：
+### 5. 运行时数据目录（.front）
 
-```bash
-# 方式一：直接跑入口
-node ./src/app.js
-
-# 方式二：已 npm link 时
-front
+```text
+.front/
+├── settings.json      # API 配置（项目级）
+├── AGENTS.md          # 系统角色定义（frontmatter: name / version / tools）
+├── memory/
+│   └── memory.md      # 长期记忆（项目级）
+├── kb/               # RAG 知识库源文档（md / txt / docx）
+├── lancedb-data/     # LanceDB 向量库
+├── design/           # 设计稿图片（png / jpg / gif / bmp / webp）
+├── screenshot/       # 调试截图
+├── rules/            # 路径匹配规则（*.md）
+├── skills/           # Skill 包（<name>/SKILL.md）
+├── commands/         # 自定义指令（<组>/<名>.md）
+└── sessions/         # 会话 JSON（<userId>/default.json）
 ```
 
-启动后出现欢迎界面，在 `问：` 后输入需求即可。输入 `/help` 查看指令；`exit` / `quit` 或 `/exit` 退出。
+用户级 `~/.front/` 同样布局，同名字段**项目级覆盖**。
 
-### 常用工作流示例
+### 6. 常用工作流
 
-1. **改代码**：描述需求，或 `@[src/App.vue]` 附加文件；模型经确认后 `write_file`。
-2. **设计稿还原**：将图片放入 `.front/design/`，输入 `#` 选择后说明需求。
-3. **知识库**：把文档放入 `.front/doc/`，执行 `/vector`，之后对话会自动检索相关片段。
-4. **调试**：代码写入后可走 `debugger_page`；有设计图时可再 `diff_pic`。
-
----
-
-## 技术依赖（摘要）
-
-| 依赖 | 用途 |
-|------|------|
-| `openai` | Chat / Embeddings（兼容接口） |
-| `@modelcontextprotocol/sdk` | MCP 客户端 |
-| `@lancedb/lancedb` + `@langchain/textsplitters` | 向量库与文本切分 |
-| `playwright` | 页面调试与截图 |
-| `@inquirer/prompts` / `ora` / `chalk` / `marked-terminal` | 交互、加载态与终端 Markdown |
-| `mammoth` | docx 文本提取 |
+1. **改代码**：描述需求，或 `@[src/App.vue]` 附加文件；模型经 `confirm` 后 `write_file`
+2. **设计稿还原**：把图片放进 `.front/design/`，输入 `#` 选择后说明需求（以图片形式注入）
+3. **知识库**：把文档放进 `.front/kb/`，执行 `/vector` 向量化，之后对话自动检索相关片段
+4. **调试**：代码改完可通过 MCP 扩展的 Playwright 工具截图
 
 ---
 
-## 安全与规范提示
+## 六、实现架构
 
-- 助手默认只协助前端相关任务，危险写操作前应经 `confirm`。
+### 总体架构
+
+```mermaid
+flowchart TD
+    User(["Developer Terminal"])
+    Input["input.ts\ncomposedDriver"]
+    App["app.ts\n对话主循环"]
+    Commands["commands/\n指令分派"]
+    Prompt["prompts.ts\nbuildSendMessages"]
+    Model["model.ts\nChatOpenAI"]
+    Engine["tools/engine.ts\nchatWithTools"]
+    Tools["tools/registry\n本地工具 ∪ MCP"]
+    Session["session.ts\n会话持久化"]
+    Files["files/\n@ # 附件"]
+    Skills["skills.ts\n摘要注入"]
+    Rules["rules.ts\nglob 匹配"]
+    Memory["memory/\n窗口压缩 + 长期记忆"]
+    RAG["rag/\n知识库召回"]
+
+    User --> Input
+    Input --> App
+    App --> Commands
+    App --> Prompt
+    App --> Session
+    Files --> Prompt
+    Skills --> Prompt
+    Rules --> Prompt
+    Memory --> Prompt
+    RAG --> Prompt
+    Prompt --> Model
+    Model --> Engine
+    Engine --> Tools
+    Tools --> Engine
+    Engine --> App
+```
+
+### 一轮对话数据流
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant D as composedDriver
+    participant A as app.ts
+    participant P as prompts.ts
+    participant M as 模型
+    participant E as chatWithTools
+    participant T as 工具注册表
+    participant S as session.ts
+
+    U->>D: 输入（/ @ # 触发）
+    D-->>A: DriverResult<br/>{action: 'message'|'command'|'exit'}
+    A->>P: buildSendMessages<br/>(history + input)
+    P->>P: System → 长期记忆 → Skills → RAG → Rules → history → userInput
+    P-->>A: BaseMessage[]
+    A->>M: boundModel.invoke(messages)
+    M->>E: AIMessage(tool_calls?)
+    E->>T: executeTool(name, args)
+    T-->>E: ToolResult
+    E->>M: ToolMessage
+    M->>E: AIMessage
+    Note over E: 循环至无 tool_calls 或达 5 轮上限
+    E-->>A: {newMessages, toolCallRecords}
+    A->>S: saveMessagesToFile
+    A-->>U: aiReplyLog<br/>(chalk + marked 渲染)
+```
+
+### 上下文拼装顺序（buildSendMessages 内部）
+
+```mermaid
+flowchart LR
+    subgraph buildSendMessages
+        A1["System\n.renderAgentPrompt()"]
+        A2["System\n长期记忆\nloadAllMemory()"]
+        A3["System\nSkills 摘要\ngetSkillSummaryText()"]
+        A4["System\n向量记忆召回\nsearchMemory()"]
+        A5["System\n知识库 RAG\nsearchKb()"]
+        A6["System\nRules 匹配\nmatchRulesForFiles()"]
+        A7["history\ntrimMessages()"]
+        A8["HumanMessage\nbuildHumanMessage()"]
+    end
+
+    A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8
+```
+
+拼装顺序：System（6 层依次追加） → 历史消息（窗口压缩后） → 用户消息（含 @[#] 附件的独立 content block）。
+
+---
+
+## 七、安全与规范提示
+
+- 助手默认只协助前端相关任务；危险写操作前应经 `confirm` 确认。
 - `settings.json` 含密钥，请加入忽略规则，不要提交到公开仓库。
 - 生成代码时注意与项目 `package.json` 中依赖版本一致，避免胡编 API。
+- LangChain 版本当前锁定 `@langchain/core@^1.2.11`，升级需验证兼容性。

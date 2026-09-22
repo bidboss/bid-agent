@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "bin": {
-    "front": "./src/app.js"
+    "front": "./src/lc/app.ts"
   },
   "keywords": [],
   "author": "",
