@@ -2,17 +2,17 @@
 
 仓库地址：https://github.com/bidboss/bid-agent
 
-面向前端开发的 AI 终端助手（CLI），在本地终端中对话、读写代码、检索项目、调用工具，并支持设计稿对照与页面调试。定位类似 Claude Code，技术栈为 Node.js + TypeScript + LangChain + OpenAI 兼容接口。
+通用编程 AI 终端助手（CLI），定位类似 Claude Code。在终端内完成对话、读写代码、工具调用与知识检索，并提供可扩展的本地工具链与上下文工程。前端场景（设计稿对照、Playwright 调试）作为示例工作流通过 MCP 自由接入。
 
 ---
 
 ## 一、产品价值
 
-- **终端内闭环开发**：提问 → 读代码 → 改文件 → 确认 → 调试截图 → 对比设计图，减少 IDE 与聊天工具之间的来回切换。
+- **终端内闭环开发**：提问 → 读代码 → 改文件 → 确认 → 工具调用 → 结果回传，减少 IDE 与聊天工具之间的来回切换。
 - **项目级上下文**：自动注入系统提示（`.front/AGENTS.md`）、长期记忆、Skills、Rules、RAG 检索结果，回答更贴合当前仓库与个人习惯。
 - **短期记忆窗口**：按 token 数自动压缩历史（默认 400 tokens），被截掉的轮次用 LLM 摘要保留关键事实。
 - **可扩展工具层**：本地 Function Tools 与 MCP 统一注册，可接外部服务而不改核心对话循环。
-- **前端工作流友好**：`@` 附加源码、`#` 附加设计图、Playwright 页面调试。
+- **本地工具链友好**：`@` 附加源码、`#` 附加图片（vision 注入）、任意工具由 MCP 自由接入。
 - **用户 / 项目双层配置**：`~/.front` 与 `.front` 分层，偏好与项目规范互不干扰。
 
 ---
@@ -76,10 +76,11 @@
 
 在 `.front/settings.json` 的 `mcpServer` 中配置 HTTP / SSE / stdio 服务后，工具以 `<服务名>__<工具名>` 形式并入同一工具列表。
 
-### 6. 设计稿与调试
+### 6. 差异化能力
 
-- `.front/design/` 存放设计稿图片（png / jpg / gif / bmp / webp），`#` 触发选择后以 vision 图片注入
-- Playwright 截图能力（工具由 MCP 扩展提供）
+- **Vision 注入**：`#` 选择 `.front/design` 图片后以 vision content block 注入模型，通用能力不仅限前端。
+- **跨场景工具接入**：Playwright 页面调试、数据库查询、CI 触发等场景均通过 MCP 接入，非内置工具，统一以 `<服务名>__<工具名>` 命名空间并入对话循环。
+- **可插拔工作流**：任意能通过 MCP 描述的能力都可以"装上即用"，不修改核心对话循环。
 
 ---
 
@@ -92,11 +93,24 @@
 
 ### AI 与编排
 
+#### 模型与消息层（依赖 LangChain）
+
 | 依赖 | 用途 |
 |------|------|
-| `@langchain/core` | 消息类型、ToolMessage、SystemMessage、HumanMessage、AIMessage |
-| `@langchain/openai` | ChatOpenAI 工厂 |
-| `@langchain/textsplitters` | 文档切分（RAG chunkSize=500 / overlap=80） |
+| `@langchain/core` | `SystemMessage` / `HumanMessage` / `AIMessage` / `ToolMessage` 消息类型与 `ToolDefinition` 结构 |
+| `@langchain/openai` | `ChatOpenAI` 工厂（替代裸调 OpenAI SDK，适配任意 OpenAI 兼容网关） |
+| `@langchain/textsplitters` | RAG 文档切分（`chunkSize=500` / `overlap=80`） |
+
+#### 编排与工具层（自研）
+
+| 模块 | 说明 |
+|------|------|
+| `src/lc/prompts.ts` | `buildSendMessages`：6 层 SystemMessage 注入（角色 → 长期记忆 → Skills → 向量记忆 → RAG → Rules） |
+| `src/lc/tools/engine.ts` | `chatWithTools`：自研工具调用循环，最多 5 轮，未使用 `AgentExecutor` / `ToolNode` 等高层抽象 |
+| `src/lc/tools/mcp/adapter.ts` | MCP 工具描述 → LangChain `ToolDefinition` 适配器 |
+
+> 本项目仅借用 LangChain 的消息类型与模型工厂，
+> 工具调用循环、上下文拼装、Memory / RAG / Skills / Rules 等编排逻辑均为自研实现。
 
 ### 工具与扩展
 
@@ -180,7 +194,7 @@ src/lc/                          # LC 引擎（全部 TypeScript）
 │   ├── index.ts              # 同步注册 13 个本地工具 + 暴露 registerAllMcpTools
 │   ├── registry.ts            # 工具注册表（registerTool / listTools / executeTool）
 │   ├── type.ts                # 工具类型
-│   ├── implementations/        # 13 个本地工具实现
+│   ├── implementations/        # 13 个本地工具实现（read_file / write_file / grep / glob / bash / memory_* / skill_load / confirm / select / 演示工具）
 │   │   ├── bash.ts
 │   │   ├── confirm.ts
 │   │   ├── get_location.ts
@@ -403,7 +417,7 @@ flowchart LR
 
 ## 七、安全与规范提示
 
-- 助手默认只协助前端相关任务；危险写操作前应经 `confirm` 确认。
+- 危险写操作（写文件 / 执行 shell）前应经 `confirm` 确认。
 - `settings.json` 含密钥，请加入忽略规则，不要提交到公开仓库。
 - 生成代码时注意与项目 `package.json` 中依赖版本一致，避免胡编 API。
 - LangChain 版本当前锁定 `@langchain/core@^1.2.11`，升级需验证兼容性。
