@@ -4,13 +4,13 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx ./src/lc/app.ts",
+    "dev": "tsx --env-file=.env ./src/lc/app.ts",
     "smoke": "tsx ./scripts/smoke-lc.mjs",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "bin": {
-    "front": "./src/app.js"
+    "front": "./src/lc/app.ts"
   },
   "keywords": [],
   "author": "",

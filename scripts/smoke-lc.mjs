@@ -1,8 +1,9 @@
 // LangChain 引擎（src/lc）的冒烟自检脚本：验证「配置文件读取 → LC 配置归一化 → ChatOpenAI 连通 → 流式输出」
 // 用法：npm run smoke   或者   node ./scripts/smoke-lc.mjs
-import { getConfigSearchPaths, resolveConfigPath } from '../src/utils/config.js';
+import { getConfigSearchPaths, resolveConfigPath } from '../src/lc/config.js';
 import { getModelConfig } from '../src/lc/config.js';
-import { createChatModel, getMessageText, smokeTestModel } from '../src/lc/model.js';
+import { createChatModel, getMessageText } from '../src/lc/model.js';
+import { AIMessage } from '@langchain/core/messages';
 
 /**
  * 给 apiKey 打码，避免自检日志泄露密钥
@@ -32,8 +33,9 @@ async function main() {
     console.log(`embedding: ${config.embedding ? config.embedding.model : '(未配置，RAG 能力需降级)'}`);
 
     console.log('\n== 3. 普通调用 ==');
-    const result = await smokeTestModel();
-    console.log(`回复: ${result.text}`);
+    const testModel = createChatModel({ streaming: false });
+    const result = await testModel.invoke('请只回复 OK');
+    console.log(`回复: ${getMessageText(result)}`);
 
     console.log('\n== 4. 流式调用 ==');
     const streamModel = createChatModel({ streaming: true });

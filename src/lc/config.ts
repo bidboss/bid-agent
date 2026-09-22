@@ -90,9 +90,9 @@ export function getModelConfig(forceReload = false): ModelConfig {
     model: (rawConfig.model as string) || DEFAULT_MODEL,
     userId: resolveUserId(rawConfig),
     embedding: normalizeEmbedding(rawConfig),
-    mcpServer: (rawConfig.mcpServer as Record<string, unknown>) || {},
+    mcpServer: (rawConfig.mcpServer as Record<string, Record<string, unknown>>) || {},
     source: resolveConfigPath(),
     raw: rawConfig,
-  };
+  } as ModelConfig;
   return cachedConfig;
 }

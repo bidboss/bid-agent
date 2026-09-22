@@ -22,24 +22,31 @@ export type ContentItem = TextContentItem | ImageContentItem;
 export type BuildHumanMessageOptions = {
   text?: string;
   images?: string[];
+  /** 直接传入已组装好的 content block 列表（多 content 形式，绕过 text/images 默认拼装） */
+  content?: ContentItem[];
 };
 export function buildHumanMessage(options: BuildHumanMessageOptions) {
-  const { text, images = [] } = options;
-  if (!images|| images.length === 0) {
+  const { text, images = [], content } = options;
+  // 显式传入 content 时直接使用（多 content block 模式）
+  if (content !== undefined) {
+    return new HumanMessage({ content });
+  }
+
+  if (!images || images.length === 0) {
     return new HumanMessage(text ?? "");
   }
 
-  const content:ContentItem[] = [];
+  const contentItems: ContentItem[] = [];
 
   if (text) {
-    content.push({
+    contentItems.push({
       type: "text",
       text
     });
   }
 
   for (const imgUrl of images) {
-    content.push({
+    contentItems.push({
       type: "image_url",
       image_url: {
         url: imgUrl
@@ -47,7 +54,7 @@ export function buildHumanMessage(options: BuildHumanMessageOptions) {
     });
   }
 
-  return new HumanMessage({ content });
+  return new HumanMessage({ content: contentItems });
 }
 
 // 助手消息
